@@ -1,0 +1,191 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------- Enums ----------
+
+enum Role {
+  EMPLOYEE
+  MANAGER
+  HR
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum RequestEventAction {
+  CREATED
+  APPROVED
+  REJECTED
+  CANCELLED
+  MODIFIED
+}
+
+enum BalanceAdjustmentType {
+  ACCRUAL
+  MANUAL_CORRECTION
+  CARRYOVER
+}
+
+// ---------- Models ----------
+
+model Department {
+  id   String @id @default(cuid())
+  name String @unique
+
+  users User[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("departments")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  firstName    String   @map("first_name")
+  lastName     String   @map("last_name")
+  role         Role     @default(EMPLOYEE)
+  hireDate     DateTime @map("hire_date") @db.Date
+  isActive     Boolean  @default(true) @map("is_active")
+
+  departmentId String?     @map("department_id")
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  managerId     String? @map("manager_id")
+  manager       User?   @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
+  directReports User[]  @relation("UserManager")
+
+  leaveRequests      LeaveRequest[]      @relation("RequesterRequests")
+  decidedRequests    LeaveRequest[]      @relation("DeciderRequests")
+  requestEvents      RequestEvent[]      @relation("ActorEvents")
+  balanceAdjustments BalanceAdjustment[] @relation("UserAdjustments")
+  grantedAdjustments BalanceAdjustment[] @relation("GrantedByAdjustments")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([departmentId])
+  @@index([managerId])
+  @@index([role])
+  @@map("users")
+}
+
+model LeaveType {
+  id                           String  @id @default(cuid())
+  name                         String  @unique
+  code                         String  @unique
+  countsAgainstVacationBalance Boolean @default(true) @map("counts_against_vacation_balance")
+  isActive                     Boolean @default(true) @map("is_active")
+
+  leaveRequests      LeaveRequest[]
+  balanceAdjustments BalanceAdjustment[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("leave_types")
+}
+
+model LeaveRequest {
+  id String @id @default(cuid())
+
+  requesterId String @map("requester_id")
+  requester   User   @relation("RequesterRequests", fields: [requesterId], references: [id], onDelete: Restrict)
+
+  leaveTypeId String    @map("leave_type_id")
+  leaveType   LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+
+  startDate    DateTime @map("start_date") @db.Date
+  endDate      DateTime @map("end_date") @db.Date
+  businessDays Int      @map("business_days")
+  reason       String?  @db.Text
+
+  status LeaveRequestStatus @default(PENDING)
+
+  deciderId    String?   @map("decider_id")
+  decider      User?     @relation("DeciderRequests", fields: [deciderId], references: [id], onDelete: Restrict)
+  decidedAt    DateTime? @map("decided_at")
+  decisionNote String?   @map("decision_note") @db.Text
+
+  events RequestEvent[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([requesterId])
+  @@index([status])
+  @@index([deciderId])
+  @@index([leaveTypeId])
+  // Soporta la validación de no-solape de fechas en capa de aplicación
+  // (Prisma no puede expresar un EXCLUDE constraint de rangos en el schema).
+  @@index([requesterId, startDate, endDate])
+  @@map("leave_requests")
+}
+
+model RequestEvent {
+  id String @id @default(cuid())
+
+  leaveRequestId String       @map("leave_request_id")
+  leaveRequest   LeaveRequest @relation(fields: [leaveRequestId], references: [id], onDelete: Restrict)
+
+  actorId String? @map("actor_id")
+  actor   User?   @relation("ActorEvents", fields: [actorId], references: [id], onDelete: Restrict)
+
+  action RequestEventAction
+  note   String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([leaveRequestId])
+  @@index([actorId])
+  @@map("request_events")
+}
+
+model Holiday {
+  id   String   @id @default(cuid())
+  date DateTime @unique @db.Date
+  name String
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("holidays")
+}
+
+model BalanceAdjustment {
+  id String @id @default(cuid())
+
+  userId String @map("user_id")
+  user   User   @relation("UserAdjustments", fields: [userId], references: [id], onDelete: Restrict)
+
+  leaveTypeId String?    @map("leave_type_id")
+  leaveType   LeaveType? @relation(fields: [leaveTypeId], references: [id], onDelete: SetNull)
+
+  type          BalanceAdjustmentType @default(MANUAL_CORRECTION)
+  days          Int
+  reason        String                @db.Text
+  effectiveDate DateTime              @map("effective_date") @db.Date
+
+  grantedById String? @map("granted_by_id")
+  grantedBy   User?   @relation("GrantedByAdjustments", fields: [grantedById], references: [id], onDelete: Restrict)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([userId])
+  @@index([effectiveDate])
+  @@index([leaveTypeId])
+  @@index([grantedById])
+  @@map("balance_adjustments")
+}
