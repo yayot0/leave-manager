@@ -27,6 +27,10 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
 - Un usuario no puede tener solicitudes con fechas encimadas.
 - Un manager no aprueba sus propias solicitudes.
 - Toda acción sobre una solicitud se guarda en el historial (auditoría).
+- `decider_id` solo se usa para aprobaciones/rechazos (acción de un MANAGER/HR).
+  Cuando el propio empleado cancela su solicitud, la cancelación se registra
+  en `request_events` con el empleado como actor y `decider_id` no se modifica
+  — así se evita violar el constraint `chk_leave_requests_decider_not_requester`.
 
 ## Convenciones
 - TypeScript en modo estricto; evitar `any`.

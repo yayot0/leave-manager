@@ -1,10 +1,12 @@
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider        = "prisma-client"
+  previewFeatures = ["postgresqlExtensions"]
+  output          = "../src/generated/prisma"
 }
 
 datasource db {
-  provider = "postgresql"
+  provider   = "postgresql"
+  extensions = [btree_gist]
 }
 
 // ---------- Enums ----------
@@ -128,8 +130,9 @@ model LeaveRequest {
   @@index([status])
   @@index([deciderId])
   @@index([leaveTypeId])
-  // Soporta la validación de no-solape de fechas en capa de aplicación
-  // (Prisma no puede expresar un EXCLUDE constraint de rangos en el schema).
+  // Supports the requester_id/start_date/end_date range query used by the
+  // no-overlap EXCLUDE constraint added by hand in migration add_constraints
+  // (Prisma cannot express a GiST EXCLUDE constraint in the schema).
   @@index([requesterId, startDate, endDate])
   @@map("leave_requests")
 }
