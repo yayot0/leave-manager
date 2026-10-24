@@ -32,6 +32,21 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
   en `request_events` con el empleado como actor y `decider_id` no se modifica
   — así se evita violar el constraint `chk_leave_requests_decider_not_requester`.
 
+## Saldo de vacaciones (periodo y fechas)
+- El saldo es por periodo de aniversario a aniversario (no año calendario).
+- Una solicitud cuenta en el periodo donde cae su `startDate`; un ajuste cuenta
+  en el periodo donde cae su `effectiveDate`.
+- Quien aún no cumple su primer aniversario tiene su periodo actual desde
+  `hireDate` hasta el día antes de su primer aniversario, con 0 días ganados.
+- Las fechas sin hora (`@db.Date`) se tratan siempre como medianoche UTC; todo
+  cálculo usa métodos `getUTC*`/`setUTC*`/`Date.UTC`, nunca los locales
+  (`getDate()`, `getDay()`, etc.), para evitar errores de un día por zona
+  horaria del servidor.
+- Aniversario de ingresos el 29 de febrero: en años no bisiestos se cumple el
+  28 de febrero, no el 1 de marzo (Art. 18 LFT: en caso de duda se aplica la
+  interpretación más favorable al trabajador, y con el 28 de febrero cumple su
+  año un día antes).
+
 ## Convenciones
 - TypeScript en modo estricto; evitar `any`.
 - Validar toda entrada de la API con Zod.

@@ -7,6 +7,7 @@
 import { env } from "../src/config/env.js";
 import { prisma } from "../src/db/prisma.js";
 import { hashPassword } from "../src/security/password.js";
+import { countBusinessDays } from "../src/domain/vacation.js";
 import {
   BalanceAdjustmentType,
   RequestEventAction,
@@ -39,7 +40,7 @@ const HOLIDAYS_DATA: { date: string; name: string }[] = [
   { date: "2027-12-25", name: "Navidad" },
 ];
 
-const HOLIDAYS = new Set(HOLIDAYS_DATA.map((h) => h.date));
+const HOLIDAY_DATES = HOLIDAYS_DATA.map((h) => d(h.date));
 
 function d(iso: string): Date {
   return new Date(`${iso}T00:00:00.000Z`);
@@ -47,24 +48,6 @@ function d(iso: string): Date {
 
 function dt(iso: string): Date {
   return new Date(`${iso}.000Z`);
-}
-
-function isoOf(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
-/** Excluye sábados, domingos y los festivos de HOLIDAYS. Inclusivo en ambos extremos. */
-function countBusinessDays(start: Date, end: Date): number {
-  let count = 0;
-  const cursor = new Date(start);
-  while (cursor.getTime() <= end.getTime()) {
-    const weekday = cursor.getUTCDay(); // 0 = domingo, 6 = sábado
-    if (weekday !== 0 && weekday !== 6 && !HOLIDAYS.has(isoOf(cursor))) {
-      count++;
-    }
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-  return count;
 }
 
 // ---------- Catálogos ----------
@@ -226,7 +209,7 @@ async function main() {
     reason?: string;
     lastUpdateAt: string;
   }) {
-    const businessDays = countBusinessDays(d(opts.start), d(opts.end));
+    const businessDays = countBusinessDays(d(opts.start), d(opts.end), HOLIDAY_DATES);
     const request = await prisma.leaveRequest.create({
       data: {
         requesterId: userId(opts.requester),
@@ -484,7 +467,7 @@ async function main() {
       type: BalanceAdjustmentType.CARRYOVER,
       days: 3,
       reason: "Saldo de vacaciones no disfrutado del año anterior, autorizado para arrastre.",
-      effectiveDate: d("2026-01-01"),
+      effectiveDate: d("2026-02-01"),
       grantedById: userId("rh1"),
       createdAt: dt("2026-01-05T09:00:00"),
     },
