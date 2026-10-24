@@ -43,3 +43,12 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
 - Estoy aprendiendo: explica brevemente qué hiciste y por qué.
 - Trabaja en pasos pequeños y verificables.
 - Pregunta antes de instalar dependencias nuevas o cambiar la estructura del proyecto.
+
+## Pendientes técnicos
+- Configurar CORS (`cors()` con `credentials: true` y origin explícito) cuando el
+  cliente (`client/`, Vite) empiece a consumir la API con cookies desde otro origen.
+- Configurar `app.set("trust proxy", ...)` antes de desplegar detrás de un proxy o
+  load balancer, para que `express-rate-limit` identifique la IP real del cliente.
+- Migrar `DATABASE_URL` (hoy leído directo de `process.env` en `server/src/db/prisma.ts`)
+  al schema de Zod de `server/src/config/env.ts`, por consistencia con el resto de las
+  variables de entorno.

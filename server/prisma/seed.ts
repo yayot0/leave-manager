@@ -4,7 +4,7 @@
  * volver a insertar, así se puede correr tantas veces como se quiera.
  */
 
-import "../src/config/env.js";
+import { env } from "../src/config/env.js";
 import { prisma } from "../src/db/prisma.js";
 import { hashPassword } from "../src/security/password.js";
 import {
@@ -14,7 +14,7 @@ import {
   type LeaveRequestStatus,
 } from "../src/generated/prisma/enums.js";
 
-if (process.env.NODE_ENV === "production") {
+if (env.NODE_ENV === "production") {
   throw new Error(
     "Refusing to run the seed with NODE_ENV=production: this script deletes all data.",
   );
