@@ -38,6 +38,15 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
   en el periodo donde cae su `effectiveDate`.
 - Quien aún no cumple su primer aniversario tiene su periodo actual desde
   `hireDate` hasta el día antes de su primer aniversario, con 0 días ganados.
+- El `startDate` de una solicitud nueva solo puede caer en el periodo actual o en
+  el siguiente (calculados con "hoy" en `APP_TIMEZONE`); más lejos se rechaza con
+  400. Así nadie aparta fechas con años de anticipación contra días que la LFT aún
+  no otorga.
+- Una solicitud que cruza dos periodos se descuenta completa del periodo donde
+  empieza (su `startDate`); no se reparte entre periodos.
+- Los días no usados NO pasan automáticamente al siguiente periodo: el saldo se
+  reinicia en cada aniversario y el remanente solo pasa si RH crea un ajuste
+  `CARRYOVER`.
 - Las fechas sin hora (`@db.Date`) se tratan siempre como medianoche UTC; todo
   cálculo usa métodos `getUTC*`/`setUTC*`/`Date.UTC`, nunca los locales
   (`getDate()`, `getDay()`, etc.), para evitar errores de un día por zona
@@ -67,3 +76,11 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
 - Migrar `DATABASE_URL` (hoy leído directo de `process.env` en `server/src/db/prisma.ts`)
   al schema de Zod de `server/src/config/env.ts`, por consistencia con el resto de las
   variables de entorno.
+- Guardar en `leave_requests` si la solicitud descontaba saldo al crearla (copia de
+  `countsAgainstVacationBalance`), o impedir editar ese campo en tipos que ya tienen
+  solicitudes; hoy el saldo lo lee del tipo en el momento del cálculo, así que
+  cambiarlo altera saldos hacia atrás. Decidirlo antes del CRUD de tipos para HR.
+- Usar el mismo bloqueo por usuario (`SELECT ... FROM users WHERE id = $1 FOR NO KEY
+  UPDATE` dentro de la transacción) en los ajustes de saldo de HR y en
+  aprobar/cancelar/modificar solicitudes; el bloqueo solo serializa a quienes lo toman.
+- Paginación de `GET /api/leave-requests/mine` (`take`/`cursor` o filtro por periodo).
