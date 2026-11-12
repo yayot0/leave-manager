@@ -3,6 +3,7 @@ import {
   calculateVacationBalance,
   countBusinessDays,
   getCurrentVacationPeriod,
+  getLatestRequestableStartDate,
   getVacationEntitlement,
   getYearsOfService,
   type LeaveRequestInput,
@@ -127,6 +128,114 @@ describe("getCurrentVacationPeriod", () => {
     const period = getCurrentVacationPeriod(hireDate, asOf);
     expect(period.start.toISOString()).toBe(utc("2026-11-01").toISOString());
     expect(period.end.toISOString()).toBe(utc("2027-10-31").toISOString());
+  });
+});
+
+/** "YYYY-MM-DD" of a UTC-midnight Date, for readable assertions. */
+function iso(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function periodIso(hireDate: string, asOf: string): { start: string; end: string } {
+  const period = getCurrentVacationPeriod(utc(hireDate), utc(asOf));
+  return { start: iso(period.start), end: iso(period.end) };
+}
+
+describe("getCurrentVacationPeriod — hired on Feb 29 (anniversary on Feb 28 in non-leap years)", () => {
+  const HIRE = "2024-02-29";
+
+  it("first period: 2024-02-29..2025-02-27 (before the first anniversary)", () => {
+    expect(periodIso(HIRE, "2024-06-01")).toEqual({ start: "2024-02-29", end: "2025-02-27" });
+  });
+
+  it("asOf 2025-06-01 => 2025-02-28..2026-02-27", () => {
+    expect(periodIso(HIRE, "2025-06-01")).toEqual({ start: "2025-02-28", end: "2026-02-27" });
+  });
+
+  it("asOf 2026-06-01 => 2026-02-28..2027-02-27 (one year long, ends the day before the 2027 anniversary)", () => {
+    expect(periodIso(HIRE, "2026-06-01")).toEqual({ start: "2026-02-28", end: "2027-02-27" });
+  });
+
+  it("the period that precedes a leap year ends on 2028-02-28 (the day before Feb 29, 2028)", () => {
+    expect(periodIso(HIRE, "2027-06-01")).toEqual({ start: "2027-02-28", end: "2028-02-28" });
+  });
+
+  it("asOf 2028-03-01 => 2028-02-29..2029-02-27 (leap year: the literal anniversary)", () => {
+    expect(periodIso(HIRE, "2028-03-01")).toEqual({ start: "2028-02-29", end: "2029-02-27" });
+  });
+
+  it("anniversary boundary: 2026-02-27 is still the previous period, 2026-02-28 starts the new one", () => {
+    expect(periodIso(HIRE, "2026-02-27")).toEqual({ start: "2025-02-28", end: "2026-02-27" });
+    expect(periodIso(HIRE, "2026-02-28")).toEqual({ start: "2026-02-28", end: "2027-02-27" });
+  });
+
+  it("anniversary boundary in a leap year: 2028-02-28 is still the previous period, 2028-02-29 starts the new one", () => {
+    expect(periodIso(HIRE, "2028-02-28")).toEqual({ start: "2027-02-28", end: "2028-02-28" });
+    expect(periodIso(HIRE, "2028-02-29")).toEqual({ start: "2028-02-29", end: "2029-02-27" });
+  });
+
+  it("consecutive periods are contiguous (end + 1 day = next start) with no gaps or overlaps over 12 years", () => {
+    const hire = utc(HIRE);
+    let period = getCurrentVacationPeriod(hire, hire);
+    expect(iso(period.start)).toBe(HIRE);
+    for (let i = 0; i < 12; i++) {
+      const dayAfterEnd = new Date(period.end.getTime() + 86_400_000);
+      const next = getCurrentVacationPeriod(hire, dayAfterEnd);
+      expect(iso(next.start), `period ${i + 1}`).toBe(iso(dayAfterEnd));
+      expect(next.end.getTime()).toBeGreaterThan(next.start.getTime());
+      // The last day of a period still belongs to it.
+      expect(getCurrentVacationPeriod(hire, period.end)).toEqual(period);
+      period = next;
+    }
+  });
+
+  it("consecutive periods are contiguous for a regular hire date too", () => {
+    const hire = utc("2023-02-01");
+    let period = getCurrentVacationPeriod(hire, hire);
+    for (let i = 0; i < 8; i++) {
+      const dayAfterEnd = new Date(period.end.getTime() + 86_400_000);
+      const next = getCurrentVacationPeriod(hire, dayAfterEnd);
+      expect(iso(next.start)).toBe(iso(dayAfterEnd));
+      period = next;
+    }
+  });
+});
+
+describe("getLatestRequestableStartDate (last day of the period after the current one)", () => {
+  it("hire 2023-02-01, asOf 2026-11-11 => 2028-01-31", () => {
+    expect(iso(getLatestRequestableStartDate(utc("2023-02-01"), utc("2026-11-11")))).toBe("2028-01-31");
+  });
+
+  it("employee with less than 1 year (hire 2026-05-04, asOf 2026-11-11) => 2028-05-03", () => {
+    expect(iso(getLatestRequestableStartDate(utc("2026-05-04"), utc("2026-11-11")))).toBe("2028-05-03");
+  });
+
+  it("on the hire date itself => end of the second period", () => {
+    expect(iso(getLatestRequestableStartDate(utc("2026-05-04"), utc("2026-05-04")))).toBe("2028-05-03");
+  });
+
+  it("moves forward one year exactly on the anniversary day", () => {
+    const hire = utc("2023-02-01");
+    expect(iso(getLatestRequestableStartDate(hire, utc("2026-01-31")))).toBe("2027-01-31");
+    expect(iso(getLatestRequestableStartDate(hire, utc("2026-02-01")))).toBe("2028-01-31");
+  });
+
+  it("hire on Feb 29 (2024-02-29): asOf 2026-11-11 => 2028-02-28", () => {
+    expect(iso(getLatestRequestableStartDate(utc("2024-02-29"), utc("2026-11-11")))).toBe("2028-02-28");
+  });
+
+  it("hire on Feb 29: on the 2027-02-28 anniversary it moves to 2029-02-27", () => {
+    const hire = utc("2024-02-29");
+    expect(iso(getLatestRequestableStartDate(hire, utc("2027-02-27")))).toBe("2028-02-28");
+    expect(iso(getLatestRequestableStartDate(hire, utc("2027-02-28")))).toBe("2029-02-27");
+  });
+
+  it("is always the end of the period that starts the day after the current one ends", () => {
+    const hire = utc("2023-02-01");
+    const asOf = utc("2026-11-11");
+    const current = getCurrentVacationPeriod(hire, asOf);
+    const next = getCurrentVacationPeriod(hire, new Date(current.end.getTime() + 86_400_000));
+    expect(getLatestRequestableStartDate(hire, asOf)).toEqual(next.end);
   });
 });
 

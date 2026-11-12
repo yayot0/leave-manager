@@ -25,3 +25,15 @@ export class ForbiddenError extends AppError {
     super(403, message);
   }
 }
+
+export class ConflictError extends AppError {
+  constructor(message = "Conflicto con el estado actual") {
+    super(409, message);
+  }
+}
+
+export class UnprocessableEntityError extends AppError {
+  constructor(message = "No se puede procesar la solicitud") {
+    super(422, message);
+  }
+}

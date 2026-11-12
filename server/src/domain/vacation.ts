@@ -122,6 +122,18 @@ export function getCurrentVacationPeriod(hireDate: Date, asOf: Date): VacationPe
   return { start, end };
 }
 
+/**
+ * Latest date a new request may start on, as of `asOf`: the last day of the
+ * period that follows the current one. A request can only start in the
+ * current anniversary period or the next one, so nobody books leave years
+ * ahead against days the LFT has not granted yet.
+ */
+export function getLatestRequestableStartDate(hireDate: Date, asOf: Date): Date {
+  const current = getCurrentVacationPeriod(hireDate, asOf);
+  const next = getCurrentVacationPeriod(hireDate, addUTCDays(current.end, 1));
+  return next.end;
+}
+
 export function calculateVacationBalance(params: {
   hireDate: Date;
   asOf: Date;
