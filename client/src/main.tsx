@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import "./index.css";
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
@@ -8,6 +9,6 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <h1>Leave Manager</h1>
+    <h1 className="p-4 text-2xl font-semibold">Leave Manager</h1>
   </StrictMode>,
 );
