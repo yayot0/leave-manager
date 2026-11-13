@@ -31,6 +31,38 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
   Cuando el propio empleado cancela su solicitud, la cancelación se registra
   en `request_events` con el empleado como actor y `decider_id` no se modifica
   — así se evita violar el constraint `chk_leave_requests_decider_not_requester`.
+  El CHECK `chk_leave_requests_decision_matches_status` lo refuerza: APPROVED/REJECTED
+  tienen `decider_id` y `decided_at`; PENDING no tiene ninguno; CANCELLED tiene ambos
+  (se aprobó y luego se canceló) o ninguno (se canceló estando pendiente).
+
+## Aprobación, rechazo y cancelación
+- Decide (aprueba o rechaza) el jefe directo activo del solicitante (`managerId`). Si
+  no tiene jefe o su jefe está inactivo, decide cualquier usuario HR activo. Nadie
+  decide sus propias solicitudes.
+- Ver el detalle de una solicitud: el solicitante, quien puede decidirla, quien ya la
+  decidió y cualquier HR. Para cualquier otro se responde 404 (no 403) para no revelar
+  que existe; la visibilidad se comprueba antes de abrir la transacción, así un id
+  oculto y uno inexistente cuestan lo mismo y nadie bloquea filas ajenas.
+- Decisión consciente (auditoría): quien ya decidió una solicitud la sigue viendo
+  aunque ya no sea el jefe del solicitante (p. ej. si el empleado cambió de equipo),
+  incluidos los eventos posteriores como una cancelación.
+- Cancelar: solo el solicitante.
+- Máquina de estados (`server/src/domain/leave-request-state.ts`):
+  PENDING → APPROVED | REJECTED | CANCELLED; APPROVED → CANCELLED solo si
+  `startDate` es posterior a "hoy" (en `APP_TIMEZONE`); REJECTED y CANCELLED son finales.
+- Rechazar exige una nota (el empleado merece saber por qué); aprobar y cancelar no.
+- Al aprobar se revalida el saldo del periodo del `startDate` (debe quedar
+  `available >= 0`), por si RH hizo un ajuste negativo desde que se creó. Si el periodo
+  quedó negativo, ninguna PENDING de ese periodo se puede aprobar hasta que se rechace
+  o cancele alguna (o RH corrija el ajuste).
+- Solicitudes PENDING cuyo `startDate` ya llegó (`startDate <= hoy`): se pueden
+  decidir tarde y aparecen primero en `pending-approvals` con `isOverdue: true`. No
+  hay vencimiento automático: ya reservan su saldo, en la práctica el empleado pudo
+  haber faltado con aprobación verbal, y un rechazo automático falsearía la auditoría.
+- Concurrencia: toda operación que cambie saldo o estado bloquea primero la fila del
+  usuario solicitante (`lockUser`) y después la de la solicitud (`lockLeaveRequest`),
+  en ese orden para evitar deadlocks (`server/src/db/locks.ts`); además el UPDATE va
+  condicionado al estado leído.
 
 ## Saldo de vacaciones (periodo y fechas)
 - El saldo es por periodo de aniversario a aniversario (no año calendario).
@@ -67,6 +99,10 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
 - Estoy aprendiendo: explica brevemente qué hiciste y por qué.
 - Trabaja en pasos pequeños y verificables.
 - Pregunta antes de instalar dependencias nuevas o cambiar la estructura del proyecto.
+- Toda migración nueva se crea con `npx prisma migrate dev --create-only` y se revisa
+  con el agente db-architect ANTES de correr cualquier test: el `globalSetup` de los
+  tests de integración corre `prisma migrate deploy` y aplica a `leave_manager_test`
+  cualquier migración que exista en la carpeta, revisada o no.
 
 ## Pendientes técnicos
 - Configurar CORS (`cors()` con `credentials: true` y origin explícito) cuando el
@@ -80,7 +116,27 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
   `countsAgainstVacationBalance`), o impedir editar ese campo en tipos que ya tienen
   solicitudes; hoy el saldo lo lee del tipo en el momento del cálculo, así que
   cambiarlo altera saldos hacia atrás. Decidirlo antes del CRUD de tipos para HR.
-- Usar el mismo bloqueo por usuario (`SELECT ... FROM users WHERE id = $1 FOR NO KEY
-  UPDATE` dentro de la transacción) en los ajustes de saldo de HR y en
-  aprobar/cancelar/modificar solicitudes; el bloqueo solo serializa a quienes lo toman.
-- Paginación de `GET /api/leave-requests/mine` (`take`/`cursor` o filtro por periodo).
+- Usar el mismo bloqueo por usuario (`lockUser` de `server/src/db/locks.ts`, dentro de
+  la transacción) en los ajustes de saldo de HR y en cualquier futura modificación de
+  solicitudes; el bloqueo solo serializa a quienes lo toman. (Crear, aprobar, rechazar
+  y cancelar ya lo usan.)
+- Paginación de `GET /api/leave-requests/mine` y de
+  `GET /api/leave-requests/pending-approvals` (`take`/`cursor` o filtro por periodo).
+- Al hacer el CRUD de empleados (HR):
+  - Validar `managerId !== id`: con un usuario como su propio jefe, `hasActiveManager`
+    da `true` y nadie puede decidir sus solicitudes.
+  - Validar que `managerId` apunte a un usuario MANAGER o HR (hoy `canDecide` no mira
+    el rol del jefe directo).
+  - Mostrar a HR las PENDING que nadie puede decidir (p. ej. el único HR activo sin
+    jefe activo).
+- En el detalle, avisar cuando el saldo del periodo está negativo: hoy
+  `permissions.canApprove` sale `true` aunque aprobar vaya a responder 422.
+- LFT pendiente de aplicar: Art. 78 (al menos 12 días continuos si el trabajador lo
+  pide) y Art. 81 (las vacaciones se otorgan dentro de los 6 meses siguientes al
+  aniversario).
+- Prisma 7 lanza en paralelo las subconsultas de relaciones de una misma operación;
+  dentro de una transacción interactiva eso dispara el aviso de `pg` "client.query()
+  when the client is already executing a query", que en pg@9 será un error. Lo
+  disparaba cargar el detalle completo (eventos, personas) dentro de la transacción;
+  por eso dentro de transacciones se leen solo los campos necesarios y el detalle se
+  carga después del commit. Revisar antes de actualizar `pg` a la v9.
