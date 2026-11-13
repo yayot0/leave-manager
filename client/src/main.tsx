@@ -1,6 +1,14 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { createBrowserRouter } from "react-router";
+import { RouterProvider } from "react-router/dom";
+import { AppProviders } from "@/app/AppProviders";
+import { createQueryClient } from "@/lib/query-client";
+import { routes } from "@/routes/routes";
 import "./index.css";
+
+const router = createBrowserRouter(routes);
+const queryClient = createQueryClient();
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {
@@ -9,6 +17,8 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <h1 className="p-4 text-2xl font-semibold">Leave Manager</h1>
+    <AppProviders queryClient={queryClient}>
+      <RouterProvider router={router} />
+    </AppProviders>
   </StrictMode>,
 );
