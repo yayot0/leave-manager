@@ -1,6 +1,7 @@
 import { prisma } from "../../db/prisma.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { isOverlapConstraintViolation } from "../../db/pg-errors.js";
+import { lockUser } from "../../db/locks.js";
 import { env } from "../../config/env.js";
 import { countBusinessDays, getLatestRequestableStartDate } from "../../domain/vacation.js";
 import { todayInTimeZone, toISODate } from "../../domain/dates.js";
@@ -84,10 +85,7 @@ export async function createLeaveRequest(
       // Serializes "read balance + insert" per user: a concurrent request from
       // the same user waits here until this transaction commits, and then
       // sees the request created by it when computing its own balance.
-      // NO KEY UPDATE is enough to serialize us and, unlike FOR UPDATE, does
-      // not block the FOR KEY SHARE locks Postgres takes when other tables
-      // (request_events, balance_adjustments) insert rows referencing users.
-      await tx.$queryRaw`SELECT id FROM users WHERE id = ${user.id} FOR NO KEY UPDATE`;
+      await lockUser(tx, user.id);
 
       const overlapping = await tx.leaveRequest.findFirst({
         where: {
