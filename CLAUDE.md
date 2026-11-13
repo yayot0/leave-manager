@@ -5,14 +5,22 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
 
 ## Stack
 - Backend: Node 22 + Express + TypeScript + Prisma + Zod (carpeta `server/`)
-- Frontend: React + Vite + TypeScript + React Router + TanStack Query (carpeta `client/`)
+- Frontend: React 19 + Vite + TypeScript + React Router 8 (modo Data) + TanStack Query,
+  con Tailwind CSS v4 y shadcn/ui sobre Base UI (carpeta `client/`)
 - Base de datos: PostgreSQL 17 en Docker Compose
-- Tests: Vitest + Supertest
+- Tests: Vitest + Supertest (server); Vitest + React Testing Library + MSW (client)
 
 ## Comandos
 - Levantar la base de datos: `docker compose up -d`
 - Ver estado de contenedores: `docker compose ps`
 - Consola de Postgres: `docker compose exec db psql -U leave_admin -d leave_manager`
+
+Frontend (desde `client/`):
+- Desarrollo: `npm run dev` (http://localhost:5173; necesita la API corriendo en :3000
+  con `cd server && npm run dev`)
+- Tests: `npm test` (una vez) o `npm run test:watch`
+- Tipos: `npm run typecheck` · Lint: `npm run lint` · Build: `npm run build`
+- Agregar un componente de shadcn/ui: `npx shadcn@latest add <componente>`
 
 ## Roles
 - EMPLOYEE: pide vacaciones y permisos, ve su saldo y sus solicitudes.
@@ -95,6 +103,43 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
 - Commits con Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`).
 - Código, nombres de variables y commits en inglés.
 
+## Convenciones del frontend (`client/`)
+- Mismo origen, sin CORS: en desarrollo el proxy de Vite (`vite.config.ts`) reenvía
+  `/api` a `localhost:3000`; el navegador solo ve `localhost:5173`, así que no hay
+  peticiones cross-origin y la cookie de sesión viaja como first-party. En producción
+  se mantiene un solo origen (ver "Pendientes técnicos").
+- Todo acceso a la API pasa por `src/api/client.ts` (`apiFetch`): manda la cookie,
+  parsea JSON y lanza `ApiError` con el mensaje de la API. Un 401 limpia la sesión y
+  regresa al login (salvo en `POST /auth/login`, donde 401 = credenciales inválidas).
+- Los tipos de las respuestas viven en `src/api/types.ts` (espejo de los del server;
+  fechas como `string`).
+- La sesión sale solo de `GET /api/auth/me` (`useSession` en `src/auth/session.ts`).
+  Dentro de las rutas protegidas se usa `useCurrentUser()`. Nada de tokens ni datos de
+  sesión en `localStorage`/`sessionStorage`: la sesión vive en la cookie httpOnly.
+- Menú y rutas salen de la misma lista (`NAV_ITEMS` en `src/app/navigation.ts`), con
+  los roles de cada sección. Ocultar opciones es UX; la seguridad la aplica la API.
+- Permisos por ruta con negación por defecto (default deny): `canAccess` normaliza
+  mayúsculas y la `/` final, y niega cualquier ruta que no esté en `NAV_ITEMS`.
+- Después de login se regresa a `from` solo si es una ruta interna permitida al rol
+  (`src/routes/redirect-target.ts`): empieza con `/` y no con `//`, el parser de `URL`
+  confirma que es del mismo origen (cubre trucos como `/\t/sitio.com`), no es `/login`
+  y el rol puede abrirla. Así se evitan open redirects. Al cerrar sesión a propósito no
+  se guarda `from`; solo cuando la sesión expira (401).
+- Al cambiar de usuario (login, logout, 401) se cancelan y borran todas las queries
+  salvo la de sesión y se vacía la caché de mutaciones (`setSession` en
+  `src/auth/session.ts`), para no filtrar datos entre usuarios.
+- Rutas de la API con parámetros: escapar cada valor con `encodeURIComponent`
+  (p. ej. `` `/leave-requests/${encodeURIComponent(id)}` ``). `new URL` normaliza `../`,
+  y un id manipulado podría apuntar a otro endpoint del mismo origen.
+- Cada página usa `PageHeading` (su `h1` con `tabIndex={-1}` y el `<title>`); al
+  cambiar de ruta `AppLayout` mueve el foco a ese `h1`.
+- Textos de la interfaz en español; código en inglés.
+- `src/components/ui/` es código generado por shadcn: se puede editar, pero con
+  cuidado y solo para adaptarlo (p. ej. traducir textos).
+- Tests: con MSW (`src/test/server.ts`), nunca reemplazando `fetch` a mano;
+  `renderApp(ruta)` (`src/test/render.tsx`) monta la app completa con las rutas reales.
+  Consultar por rol y nombre accesible (`getByRole`, `getByLabelText`).
+
 ## Forma de trabajar
 - Estoy aprendiendo: explica brevemente qué hiciste y por qué.
 - Trabaja en pasos pequeños y verificables.
@@ -105,8 +150,19 @@ Proyecto de portafolio: debe verse y funcionar como software profesional.
   cualquier migración que exista en la carpeta, revisada o no.
 
 ## Pendientes técnicos
-- Configurar CORS (`cors()` con `credentials: true` y origin explícito) cuando el
-  cliente (`client/`, Vite) empiece a consumir la API con cookies desde otro origen.
+- CORS: no se usa, porque frontend y API comparten origen. Para producción, servir
+  ambos bajo un solo dominio con un reverse proxy (Caddy o Nginx): estáticos de
+  `client/dist` con fallback a `index.html` y `/api` reenviado a Node. Solo configurar
+  `cors()` (`credentials: true` y origin explícito) si algún día se separan los dominios.
+  Al configurarlo:
+  - Los headers de seguridad del frontend los pone el proxy: `helmet()` solo cubre las
+    respuestas de Express (`/api`). El `index.html` necesita su propio
+    `Content-Security-Policy` (al menos `default-src 'self'; frame-ancestors 'none'`),
+    `Strict-Transport-Security`, `X-Content-Type-Options` y `Referrer-Policy`.
+  - El fallback a `index.html` no debe capturar `/api`: `/api/ruta-inexistente` tiene que
+    llegar a Node y responder 404 JSON, no HTML con 200.
+  - Correr Node con `NODE_ENV=production`; si falta, la cookie sale sin `secure` aunque
+    haya HTTPS.
 - Configurar `app.set("trust proxy", ...)` antes de desplegar detrás de un proxy o
   load balancer, para que `express-rate-limit` identifique la IP real del cliente.
 - Migrar `DATABASE_URL` (hoy leído directo de `process.env` en `server/src/db/prisma.ts`)
