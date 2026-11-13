@@ -42,7 +42,13 @@ export async function resetDb(): Promise<void> {
 let userCounter = 0;
 
 export async function createUser(
-  overrides: { hireDate?: string; role?: Role; isActive?: boolean; email?: string } = {},
+  overrides: {
+    hireDate?: string;
+    role?: Role;
+    isActive?: boolean;
+    email?: string;
+    managerId?: string | null;
+  } = {},
 ) {
   userCounter++;
   return prisma.user.create({
@@ -55,6 +61,7 @@ export async function createUser(
       role: overrides.role ?? "EMPLOYEE",
       hireDate: d(overrides.hireDate ?? "2023-02-01"),
       isActive: overrides.isActive ?? true,
+      managerId: overrides.managerId ?? null,
     },
   });
 }
@@ -86,7 +93,17 @@ export async function createLeaveRequestRow(opts: {
   businessDays: number;
   status?: LeaveRequestStatus;
   createdAt?: Date;
+  /** Who decided it. Only allowed for APPROVED, REJECTED or CANCELLED. */
+  deciderId?: string;
+  decidedAt?: Date;
 }) {
+  const status = opts.status ?? "PENDING";
+  // chk_leave_requests_decision_matches_status: APPROVED/REJECTED need a
+  // decider (different from the requester); invent one if the test did not
+  // pass it, so every row this helper creates is valid for the database.
+  const needsDecision = status === "APPROVED" || status === "REJECTED";
+  const deciderId =
+    opts.deciderId ?? (needsDecision ? (await createUser({ role: "MANAGER" })).id : undefined);
   return prisma.leaveRequest.create({
     data: {
       requesterId: opts.requesterId,
@@ -94,7 +111,8 @@ export async function createLeaveRequestRow(opts: {
       startDate: d(opts.start),
       endDate: d(opts.end),
       businessDays: opts.businessDays,
-      status: opts.status ?? "PENDING",
+      status,
+      ...(deciderId ? { deciderId, decidedAt: opts.decidedAt ?? new Date() } : {}),
       ...(opts.createdAt ? { createdAt: opts.createdAt } : {}),
     },
   });

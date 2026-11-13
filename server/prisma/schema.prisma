@@ -118,6 +118,10 @@ model LeaveRequest {
 
   deciderId    String?   @map("decider_id")
   decider      User?     @relation("DeciderRequests", fields: [deciderId], references: [id], onDelete: Restrict)
+  // decider_id/decided_at must match status (CHECK chk_leave_requests_decision_matches_status,
+  // added by hand in migration add_decision_consistency_check): both set for APPROVED/REJECTED,
+  // both NULL for PENDING, both-or-neither for CANCELLED (an approved request cancelled by the
+  // employee keeps its decider). Also chk_leave_requests_decider_not_requester.
   decidedAt    DateTime? @map("decided_at")
   decisionNote String?   @map("decision_note") @db.Text
 
