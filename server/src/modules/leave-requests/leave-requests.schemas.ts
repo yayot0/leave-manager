@@ -42,3 +42,32 @@ export const createLeaveRequestSchema = z
   });
 
 export type CreateLeaveRequestInput = z.infer<typeof createLeaveRequestSchema>;
+
+// Only length is checked (not the cuid format) on purpose: a malformed id must
+// get the same 404 as a nonexistent one, so ids cannot be probed by format.
+export const leaveRequestIdSchema = z
+  .string()
+  .trim()
+  .min(1, "Id inválido")
+  .max(64, "Id inválido");
+
+const optionalNote = z
+  .string()
+  .trim()
+  .max(500, "La nota no puede exceder 500 caracteres")
+  .optional()
+  .transform((value) => (value ? value : undefined));
+
+/** approve and cancel: note is optional. */
+export const optionalNoteSchema = z.object({ note: optionalNote }).strict();
+
+/** reject: the employee deserves to know why, so the note is required. */
+export const requiredNoteSchema = z
+  .object({
+    note: z
+      .string({ error: "La nota es obligatoria al rechazar" })
+      .trim()
+      .min(1, "La nota es obligatoria al rechazar")
+      .max(500, "La nota no puede exceder 500 caracteres"),
+  })
+  .strict();

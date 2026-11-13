@@ -1,6 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
 import { AppError } from "../errors/AppError.js";
+import { isTransactionTimeout } from "../db/pg-errors.js";
 
 /**
  * Errors raised by Express's own middleware (e.g. express.json() on a
@@ -43,6 +44,13 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
           ? "El cuerpo de la petición es demasiado grande"
           : "Solicitud inválida";
     res.status(err.status).json({ error: message });
+    return;
+  }
+
+  if (isTransactionTimeout(err)) {
+    // Transient contention, not a bug: tell the client to retry.
+    res.setHeader("Retry-After", "1");
+    res.status(503).json({ error: "El servidor está ocupado; intenta de nuevo en un momento" });
     return;
   }
 

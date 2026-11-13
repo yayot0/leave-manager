@@ -14,21 +14,22 @@ export async function getVacationBalance(
   user: { id: string; hireDate: Date },
   asOf: Date,
 ): Promise<VacationBalance> {
-  const [adjustments, leaveRequests] = await Promise.all([
-    db.balanceAdjustment.findMany({
-      where: { userId: user.id },
-      select: { days: true, effectiveDate: true },
-    }),
-    db.leaveRequest.findMany({
-      where: { requesterId: user.id, status: { in: ["PENDING", "APPROVED"] } },
-      select: {
-        startDate: true,
-        businessDays: true,
-        status: true,
-        leaveType: { select: { countsAgainstVacationBalance: true } },
-      },
-    }),
-  ]);
+  // Sequential on purpose: inside a transaction `db` is a single connection,
+  // so running these with Promise.all gains nothing and pg deprecates
+  // issuing a query while another one is still running on the same client.
+  const adjustments = await db.balanceAdjustment.findMany({
+    where: { userId: user.id },
+    select: { days: true, effectiveDate: true },
+  });
+  const leaveRequests = await db.leaveRequest.findMany({
+    where: { requesterId: user.id, status: { in: ["PENDING", "APPROVED"] } },
+    select: {
+      startDate: true,
+      businessDays: true,
+      status: true,
+      leaveType: { select: { countsAgainstVacationBalance: true } },
+    },
+  });
 
   return calculateVacationBalance({
     hireDate: user.hireDate,

@@ -26,6 +26,12 @@ export class ForbiddenError extends AppError {
   }
 }
 
+export class NotFoundError extends AppError {
+  constructor(message = "No encontrado") {
+    super(404, message);
+  }
+}
+
 export class ConflictError extends AppError {
   constructor(message = "Conflicto con el estado actual") {
     super(409, message);

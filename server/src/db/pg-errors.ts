@@ -1,5 +1,14 @@
 import { Prisma } from "../generated/prisma/client.js";
 
+/**
+ * True when an interactive transaction could not start in time or ran past
+ * its timeout (Prisma P2028), typically because it waited too long for a row
+ * lock under heavy contention. It is transient: the client may retry.
+ */
+export function isTransactionTimeout(err: unknown): boolean {
+  return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2028";
+}
+
 /** Postgres SQLSTATE for exclusion_violation (EXCLUDE constraints). */
 const EXCLUSION_VIOLATION = "23P01";
 
