@@ -238,6 +238,10 @@ describe("MyRequestsPage", () => {
       // ...and the dialog, with its error, is still there.
       expect(screen.getByRole("alertdialog")).toBe(dialog);
       expect(within(dialog).getByRole("alert")).toBe(alert);
+      // Retrying can never succeed: confirm is disabled and focus moved to "Volver", the only way out.
+      expect(within(dialog).getByRole("button", { name: "Sí, cancelar solicitud" })).toBeDisabled();
+      expect(within(dialog).getByLabelText("Motivo de la cancelación (opcional)")).toBeDisabled();
+      expect(within(dialog).getByRole("button", { name: "Volver" })).toHaveFocus();
 
       await user.click(within(dialog).getByRole("button", { name: "Volver" }));
       await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());

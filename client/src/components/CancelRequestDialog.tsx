@@ -1,8 +1,8 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { CircleAlert } from "lucide-react";
 import { ApiError } from "@/api/client";
 import type { LeaveRequest, LeaveRequestDetail } from "@/api/types";
-import { useCancelLeaveRequest } from "@/hooks/leave-requests";
+import { isConflictError, useCancelLeaveRequest } from "@/hooks/leave-requests";
 import { useStickyDialog } from "@/hooks/use-sticky-dialog";
 import { formatDateRange, formatShortDate } from "@/lib/dates";
 import { formatBusinessDays } from "@/lib/numbers";
@@ -68,6 +68,10 @@ export function CancelRequestDialog({ request, canCancel, size = "default" }: Ca
       cancel.reset();
     },
   });
+  const backRef = useRef<HTMLButtonElement>(null);
+  // After a 409 it can no longer be cancelled: only "Volver" is left.
+  const conflict = isConflictError(cancel.error);
+  const locked = cancel.isPending || conflict;
   const noteId = useId();
   const noteHintId = useId();
 
@@ -75,10 +79,19 @@ export function CancelRequestDialog({ request, canCancel, size = "default" }: Ca
   const returnsDays = request.leaveType.countsAgainstVacationBalance;
 
   const handleConfirm = () => {
-    if (cancel.isPending) {
+    if (locked) {
       return;
     }
-    cancel.mutate({ id: request.id, note: note.trim() || undefined }, { onSuccess: closeAfterSuccess });
+    cancel.mutate(
+      { id: request.id, note: note.trim() || undefined },
+      {
+        onSuccess: closeAfterSuccess,
+        // The focused confirm button becomes disabled: move focus to the one way out.
+        onError: (error) => {
+          if (isConflictError(error)) backRef.current?.focus();
+        },
+      },
+    );
   };
 
   const error = cancel.isError ? cancelErrorMessage(cancel.error) : null;
@@ -127,7 +140,7 @@ export function CancelRequestDialog({ request, canCancel, size = "default" }: Ca
             onChange={(event) => setNote(event.target.value)}
             maxLength={NOTE_MAX_LENGTH}
             aria-describedby={noteHintId}
-            disabled={cancel.isPending}
+            disabled={locked}
           />
           <p id={noteHintId} className="text-xs text-muted-foreground">
             {note.length}/{NOTE_MAX_LENGTH} caracteres
@@ -143,8 +156,10 @@ export function CancelRequestDialog({ request, canCancel, size = "default" }: Ca
         ) : null}
 
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={cancel.isPending}>Volver</AlertDialogCancel>
-          <Button variant="destructive" onClick={handleConfirm} disabled={cancel.isPending}>
+          <AlertDialogCancel ref={backRef} disabled={cancel.isPending}>
+            Volver
+          </AlertDialogCancel>
+          <Button variant="destructive" onClick={handleConfirm} disabled={locked}>
             {cancel.isPending ? "Cancelando…" : "Sí, cancelar solicitud"}
           </Button>
         </AlertDialogFooter>

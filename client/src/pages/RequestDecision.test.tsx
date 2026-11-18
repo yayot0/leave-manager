@@ -221,11 +221,46 @@ describe("approve dialog", () => {
     // The detail behind refreshed (the trigger is gone) but the dialog is still readable.
     await waitFor(() => expect(screen.queryByRole("button", { name: "Aprobar" })).not.toBeInTheDocument());
     expect(screen.getByRole("alertdialog")).toHaveTextContent("el empleado la canceló");
+    // Retrying can never succeed: confirm is disabled and focus moved to "Volver", the only way out.
+    expect(within(dialog).getByRole("button", { name: "Sí, aprobar" })).toBeDisabled();
+    expect(within(dialog).getByLabelText("Nota para el empleado (opcional)")).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Volver" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "Volver" })).toHaveFocus();
 
     await user.click(within(dialog).getByRole("button", { name: "Volver" }));
     await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
     expect(screen.getByText("Cancelada", { selector: "span" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1, name: "Detalle de solicitud" })).toHaveFocus();
+  });
+
+  it("after a 409 on reject, only Volver is left and nothing else is sent", async () => {
+    mockSession(MANAGER);
+    mockDetail(() => HttpResponse.json({ leaveRequest: buildDecidableDetail() }));
+    let calls = 0;
+    server.use(
+      http.post("/api/leave-requests/:id/reject", () => {
+        calls++;
+        return HttpResponse.json({ error: "No se puede rechazar una solicitud cancelada" }, { status: 409 });
+      }),
+    );
+    const { user } = renderApp("/solicitudes/req-1");
+
+    await user.click(await screen.findByRole("button", { name: "Rechazar" }));
+    const dialog = await screen.findByRole("alertdialog");
+    await user.type(within(dialog).getByLabelText("Motivo del rechazo (obligatorio)"), "Cierre de mes");
+    await user.click(within(dialog).getByRole("button", { name: "Sí, rechazar" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("La solicitud cambió de estado");
+    const confirm = within(dialog).getByRole("button", { name: "Sí, rechazar" });
+    expect(confirm).toBeDisabled();
+    expect(within(dialog).getByLabelText("Motivo del rechazo (obligatorio)")).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Volver" })).toHaveFocus();
+    // Clicking the disabled button sends nothing again.
+    await user.click(confirm);
+    expect(calls).toBe(1);
+
+    await user.click(within(dialog).getByRole("button", { name: "Volver" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument());
   });
 
   it("shows a 422 (insufficient balance) inside the dialog", async () => {

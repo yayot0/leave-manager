@@ -2,7 +2,7 @@ import { useId, useRef, useState, type FormEvent } from "react";
 import { CalendarClock, CircleAlert } from "lucide-react";
 import { ApiError } from "@/api/client";
 import type { LeaveRequestDetail } from "@/api/types";
-import { useDecideLeaveRequest, type Decision } from "@/hooks/leave-requests";
+import { isConflictError, useDecideLeaveRequest, type Decision } from "@/hooks/leave-requests";
 import { useStickyDialog } from "@/hooks/use-sticky-dialog";
 import { formatDate, formatDateRange, formatShortDate } from "@/lib/dates";
 import { formatBusinessDays, formatDays } from "@/lib/numbers";
@@ -114,6 +114,10 @@ export function DecisionDialog({ decision, request, allowed, onDecided }: Decisi
     },
   });
   const noteRef = useRef<HTMLTextAreaElement>(null);
+  const backRef = useRef<HTMLButtonElement>(null);
+  // After a 409 the decision can no longer be made: only "Volver" is left.
+  const conflict = isConflictError(mutation.error);
+  const locked = mutation.isPending || conflict;
   const noteId = useId();
   const noteHintId = useId();
   const noteErrorId = useId();
@@ -124,7 +128,7 @@ export function DecisionDialog({ decision, request, allowed, onDecided }: Decisi
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (mutation.isPending) {
+    if (locked) {
       return;
     }
     const trimmed = note.trim();
@@ -137,7 +141,16 @@ export function DecisionDialog({ decision, request, allowed, onDecided }: Decisi
       noteRef.current?.focus();
       return;
     }
-    mutation.mutate({ id: request.id, note: trimmed }, { onSuccess });
+    mutation.mutate(
+      { id: request.id, note: trimmed },
+      {
+        onSuccess,
+        // The focused confirm button becomes disabled: move focus to the one way out.
+        onError: (mutationError) => {
+          if (isConflictError(mutationError)) backRef.current?.focus();
+        },
+      },
+    );
   };
 
   const error = mutation.isError ? decisionErrorMessage(mutation.error, decision) : null;
@@ -196,7 +209,7 @@ export function DecisionDialog({ decision, request, allowed, onDecided }: Decisi
               required={isReject}
               aria-invalid={noteError ? true : undefined}
               aria-describedby={noteError ? `${noteErrorId} ${noteHintId}` : noteHintId}
-              disabled={mutation.isPending}
+              disabled={locked}
             />
             {noteError ? (
               <p id={noteErrorId} className="text-sm text-destructive">
@@ -217,10 +230,10 @@ export function DecisionDialog({ decision, request, allowed, onDecided }: Decisi
           ) : null}
 
           <AlertDialogFooter>
-            <AlertDialogCancel type="button" disabled={mutation.isPending}>
+            <AlertDialogCancel ref={backRef} type="button" disabled={mutation.isPending}>
               Volver
             </AlertDialogCancel>
-            <Button type="submit" variant={isReject ? "destructive" : "default"} disabled={mutation.isPending}>
+            <Button type="submit" variant={isReject ? "destructive" : "default"} disabled={locked}>
               {mutation.isPending ? texts.pending : texts.confirm}
             </Button>
           </AlertDialogFooter>

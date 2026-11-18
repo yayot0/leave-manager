@@ -121,6 +121,15 @@ export function useCreateLeaveRequest() {
 }
 
 /**
+ * 409: the request changed state meanwhile, so retrying the same action can
+ * never succeed. The dialogs then disable their confirm button and leave
+ * only "Volver".
+ */
+export function isConflictError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409;
+}
+
+/**
  * Errors after which what is on screen is stale and worth refreshing behind
  * the dialog: the request changed state (409) or vanished (404), the user may
  * no longer decide it (403), or the balance changed (422).

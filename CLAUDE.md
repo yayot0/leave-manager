@@ -192,6 +192,8 @@ Frontend (desde `client/`):
   `src/hooks/use-sticky-dialog.ts`). Tras 403/404/409/422 se refresca todo detrás del diálogo
   (`useRequestActionMutation`); el diálogo muestra textos propios, no el mensaje de la API. El
   saldo insuficiente al aprobar se reconoce por `code: "INSUFFICIENT_BALANCE"`, no por el 422.
+  Tras un 409 (`isConflictError`) reintentar nunca funcionaría: el botón de confirmar y la nota
+  se deshabilitan y el foco pasa a "Volver", la única salida.
 - El detalle se sigue mostrando mientras haya `data`, aunque un refresco falle (p. ej. 404
   porque el empleado cambió de jefe): así no se desmonta el diálogo con su error. En ese caso se
   avisa que los datos son viejos y no se ofrece ninguna acción.
