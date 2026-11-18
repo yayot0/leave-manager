@@ -7,8 +7,14 @@ export const ROUTES = {
   balance: "/saldo",
   myRequests: "/solicitudes",
   newRequest: "/solicitudes/nueva",
+  requestDetail: "/solicitudes/:id",
   approvals: "/aprobaciones",
   admin: "/administracion",
 } as const;
 
 export const HOME_ROUTE = ROUTES.balance;
+
+/** Path of a request's detail page; the id is escaped like any URL segment. */
+export function requestDetailPath(id: string): string {
+  return `/solicitudes/${encodeURIComponent(id)}`;
+}

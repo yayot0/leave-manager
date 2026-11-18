@@ -64,4 +64,19 @@ describe("canAccess", () => {
     expect(canAccess("/administracion/festivos", "HR")).toBe(false);
     expect(canAccess("/no-existe", "HR")).toBe(false);
   });
+
+  it("matches the detail route by pattern, one segment per id", () => {
+    expect(canAccess("/solicitudes/abc123", "EMPLOYEE")).toBe(true);
+    expect(canAccess("/Solicitudes/abc123/", "MANAGER")).toBe(true);
+    expect(canAccess("/solicitudes/nueva", "HR")).toBe(true);
+    // ":id" is one segment: deeper paths are still unknown, so denied.
+    expect(canAccess("/solicitudes/abc/editar", "HR")).toBe(false);
+    expect(canAccess("/aprobaciones/abc", "MANAGER")).toBe(false);
+  });
+});
+
+describe("redirectTarget with the detail route", () => {
+  it("returns to a request detail after login", () => {
+    expect(redirectTarget({ from: "/solicitudes/abc123" }, "EMPLOYEE")).toBe("/solicitudes/abc123");
+  });
 });
