@@ -3,8 +3,8 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw/http";
 import type { PendingApproval } from "@/api/types";
 import { renderApp } from "@/test/render";
-import { mockSession, server } from "@/test/server";
-import { buildPendingApproval, buildUser, PERSONAL_TYPE } from "@/test/fixtures";
+import { mockDetail, mockSession, server } from "@/test/server";
+import { buildDecidableDetail, buildPendingApproval, buildUser, PERSONAL_TYPE } from "@/test/fixtures";
 import { deferred } from "@/test/deferred";
 
 function mockPendingApprovals(requests: PendingApproval[]) {
@@ -63,14 +63,18 @@ describe("ApprovalsPage", () => {
     expect(items[0]).toHaveTextContent("2 días hábiles");
   });
 
-  it("links each request to its detail with a descriptive name", async () => {
+  it("links each request to its detail with a descriptive name, and back to Aprobaciones", async () => {
     mockSession(buildUser("MANAGER"));
     mockPendingApprovals([UPCOMING]);
-    renderApp("/aprobaciones");
+    mockDetail(() => HttpResponse.json({ leaveRequest: buildDecidableDetail({ id: "req-upcoming" }) }));
+    const { user } = renderApp("/aprobaciones");
 
     const table = await screen.findByRole("table");
     const link = within(table).getByRole("link", { name: /Revisar solicitud de Ana García: Permiso personal/ });
     expect(link).toHaveAttribute("href", "/solicitudes/req-upcoming");
+    await user.click(link);
+
+    expect(await screen.findByRole("link", { name: "Volver a Aprobaciones" })).toHaveAttribute("href", "/aprobaciones");
   });
 
   it("shows a friendly empty state", async () => {

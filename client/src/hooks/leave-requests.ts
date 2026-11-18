@@ -3,13 +3,16 @@ import { getMyBalance } from "@/api/balance";
 import { ApiError } from "@/api/client";
 import { listLeaveTypes } from "@/api/leave-types";
 import {
+  approveLeaveRequest,
   cancelLeaveRequest,
   createLeaveRequest,
   getLeaveRequest,
   listMyLeaveRequests,
   listPendingApprovals,
   previewLeaveRequest,
+  rejectLeaveRequest,
 } from "@/api/leave-requests";
+import type { LeaveRequestDetail } from "@/api/types";
 import { queryKeys, type PreviewInput } from "@/api/query-keys";
 import { useDebouncedValue } from "./use-debounced-value";
 
@@ -117,27 +120,51 @@ export function useCreateLeaveRequest() {
   });
 }
 
-/** 409/404 on an action: the request changed (or vanished) meanwhile, so what is on screen is stale. */
-export function isStaleRequestError(error: unknown): boolean {
-  return error instanceof ApiError && (error.status === 409 || error.status === 404);
+/**
+ * Errors after which what is on screen is stale and worth refreshing behind
+ * the dialog: the request changed state (409) or vanished (404), the user may
+ * no longer decide it (403), or the balance changed (422).
+ */
+function shouldRefreshAfter(error: unknown): boolean {
+  return error instanceof ApiError && [403, 404, 409, 422].includes(error.status);
 }
 
-export function useCancelLeaveRequest() {
+/**
+ * Shared shape of approve/reject/cancel: the API answers with the updated
+ * detail, which is shown right away (no refetch), and everything else that
+ * depends on the request is refreshed. On a "stale" error the data is
+ * refreshed too: the dialogs stay mounted while open, so the error remains
+ * readable even if the trigger goes away.
+ */
+function useRequestActionMutation<TVariables>(action: (variables: TVariables) => Promise<LeaveRequestDetail>) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, note }: { id: string; note?: string }) => cancelLeaveRequest(id, note),
+    mutationFn: action,
     onSuccess: (detail) => {
-      // The API answers with the updated detail: show it right away, without
-      // fetching it again.
       queryClient.setQueryData(queryKeys.leaveRequestDetail(detail.id), detail);
       invalidateLeaveData(queryClient, detail.id);
     },
     onError: (error) => {
-      // Safe to refresh right away: CancelRequestDialog stays mounted while
-      // open, so the error remains readable even if the trigger goes away.
-      if (isStaleRequestError(error)) {
+      if (shouldRefreshAfter(error)) {
         invalidateLeaveData(queryClient);
       }
     },
   });
+}
+
+export function useCancelLeaveRequest() {
+  return useRequestActionMutation(({ id, note }: { id: string; note?: string }) => cancelLeaveRequest(id, note));
+}
+
+export type Decision = "approve" | "reject";
+
+/**
+ * Approve or reject, one mutation per dialog. `note` is "" for no note: the
+ * approve call then sends none; for reject the dialog never lets it be empty
+ * (and the API would answer 400 anyway).
+ */
+export function useDecideLeaveRequest(decision: Decision) {
+  return useRequestActionMutation(({ id, note }: { id: string; note: string }) =>
+    decision === "approve" ? approveLeaveRequest(id, note || undefined) : rejectLeaveRequest(id, note),
+  );
 }

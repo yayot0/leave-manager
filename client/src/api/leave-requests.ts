@@ -61,3 +61,20 @@ export async function cancelLeaveRequest(id: string, note?: string): Promise<Lea
   });
   return leaveRequest;
 }
+
+export async function approveLeaveRequest(id: string, note?: string): Promise<LeaveRequestDetail> {
+  const { leaveRequest } = await apiFetch<LeaveRequestDetailResponse>(`${requestPath(id)}/approve`, {
+    method: "POST",
+    body: note ? { note } : {},
+  });
+  return leaveRequest;
+}
+
+/** The API requires a non-empty note to reject. */
+export async function rejectLeaveRequest(id: string, note: string): Promise<LeaveRequestDetail> {
+  const { leaveRequest } = await apiFetch<LeaveRequestDetailResponse>(`${requestPath(id)}/reject`, {
+    method: "POST",
+    body: { note },
+  });
+  return leaveRequest;
+}
