@@ -15,6 +15,7 @@ export const queryKeys = {
   leaveTypes: ["leave-types"] as const,
   leaveRequests: ["leave-requests"] as const,
   myLeaveRequests: ["leave-requests", "mine"] as const,
+  pendingApprovals: ["leave-requests", "pending-approvals"] as const,
   leaveRequestDetail: (id: string) => ["leave-requests", "detail", id] as const,
   leaveRequestPreviews: ["leave-requests", "preview"] as const,
   leaveRequestPreview: (input: PreviewInput) => ["leave-requests", "preview", input] as const,

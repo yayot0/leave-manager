@@ -3,6 +3,7 @@ import type {
   LeaveRequestDetail,
   LeaveRequestPreview,
   LeaveType,
+  PendingApproval,
   Person,
   Role,
   User,
@@ -109,6 +110,21 @@ export function buildPreview(overrides: Partial<LeaveRequestPreview> = {}): Leav
     balance: { period: { start: "2026-03-15", end: "2027-03-14" }, available: 14, availableAfter: 11 },
     problems: [],
     canSubmit: true,
+    ...overrides,
+  };
+}
+
+export function buildPendingApproval(overrides: Partial<PendingApproval> = {}): PendingApproval {
+  return {
+    id: "req-1",
+    startDate: "2026-12-01",
+    endDate: "2026-12-03",
+    businessDays: 3,
+    reason: "Viaje familiar",
+    createdAt: "2026-11-10T16:00:00.000Z",
+    leaveType: VACATION_TYPE,
+    requester: EMPLOYEE_PERSON,
+    isOverdue: false,
     ...overrides,
   };
 }

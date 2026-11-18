@@ -103,6 +103,27 @@ export interface LeaveRequestDetail extends Omit<LeaveRequest, "permissions"> {
   permissions: { canApprove: boolean; canReject: boolean; canCancel: boolean };
 }
 
+/** An item of GET /leave-requests/pending-approvals (oldest start first, so overdue ones lead). */
+export interface PendingApproval {
+  id: string;
+  /** "YYYY-MM-DD" */
+  startDate: string;
+  /** "YYYY-MM-DD" */
+  endDate: string;
+  businessDays: number;
+  reason: string | null;
+  /** Instant (ISO with time). */
+  createdAt: string;
+  leaveType: LeaveType;
+  requester: Person;
+  /** PENDING whose start date already arrived (it can still be decided). */
+  isOverdue: boolean;
+}
+
+export interface PendingApprovalsResponse {
+  leaveRequests: PendingApproval[];
+}
+
 export interface LeaveRequestDetailResponse {
   leaveRequest: LeaveRequestDetail;
 }

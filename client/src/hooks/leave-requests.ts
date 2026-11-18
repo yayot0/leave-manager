@@ -7,6 +7,7 @@ import {
   createLeaveRequest,
   getLeaveRequest,
   listMyLeaveRequests,
+  listPendingApprovals,
   previewLeaveRequest,
 } from "@/api/leave-requests";
 import { queryKeys, type PreviewInput } from "@/api/query-keys";
@@ -27,6 +28,19 @@ export function useLeaveTypes() {
 
 export function useMyLeaveRequests() {
   return useQuery({ queryKey: queryKeys.myLeaveRequests, queryFn: ({ signal }) => listMyLeaveRequests(signal) });
+}
+
+/**
+ * Requests the current user can decide. Shared by the Aprobaciones page and
+ * the menu counter (same key, so one fetch serves both). `enabled: false`
+ * for roles that never decide, so they do not call the endpoint at all.
+ */
+export function usePendingApprovals({ enabled = true }: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: queryKeys.pendingApprovals,
+    queryFn: ({ signal }) => listPendingApprovals(signal),
+    enabled,
+  });
 }
 
 export function useLeaveRequest(id: string) {

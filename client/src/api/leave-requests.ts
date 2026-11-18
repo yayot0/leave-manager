@@ -7,6 +7,8 @@ import type {
   LeaveRequestPreview,
   LeaveRequestPreviewResponse,
   LeaveRequestsResponse,
+  PendingApproval,
+  PendingApprovalsResponse,
 } from "./types";
 import type { PreviewInput } from "./query-keys";
 
@@ -20,6 +22,11 @@ const requestPath = (id: string) => `/leave-requests/${encodeURIComponent(id)}`;
 
 export async function listMyLeaveRequests(signal?: AbortSignal): Promise<LeaveRequest[]> {
   const { leaveRequests } = await apiFetch<LeaveRequestsResponse>("/leave-requests/mine", { signal });
+  return leaveRequests;
+}
+
+export async function listPendingApprovals(signal?: AbortSignal): Promise<PendingApproval[]> {
+  const { leaveRequests } = await apiFetch<PendingApprovalsResponse>("/leave-requests/pending-approvals", { signal });
   return leaveRequests;
 }
 

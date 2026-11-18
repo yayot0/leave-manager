@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useLogout } from "@/auth/session";
 import { useCurrentUser } from "@/auth/current-user";
-import { navItemsFor, ROLE_LABELS } from "@/app/navigation";
+import { canAccess, navItemsFor, ROLE_LABELS, ROUTES } from "@/app/navigation";
+import { usePendingApprovals } from "@/hooks/leave-requests";
 import type { Role } from "@/api/types";
 import { APP_NAME } from "@/components/PageHeading";
 
@@ -15,8 +16,46 @@ interface MainNavProps {
   onNavigate?: (to: string) => void;
 }
 
+/** "1 pendiente", "3 pendientes" */
+function pendingLabel(count: number): string {
+  return `${count} ${count === 1 ? "pendiente" : "pendientes"}`;
+}
+
+/**
+ * How many requests wait for the user's decision, next to "Aprobaciones".
+ * Nothing while loading, on error or at zero: the menu entry still works and
+ * the page itself shows those states. The number is hidden from screen
+ * readers, which get the full text instead ("Aprobaciones (3 pendientes)").
+ */
+function PendingCount({ count, isActive }: { count: number; isActive: boolean }) {
+  if (count === 0) {
+    return null;
+  }
+  return (
+    <>
+      <span
+        aria-hidden="true"
+        className={cn(
+          "ml-auto min-w-5 rounded-full px-1.5 text-center text-xs font-semibold tabular-nums",
+          isActive ? "bg-primary-foreground text-primary" : "bg-primary text-primary-foreground",
+        )}
+      >
+        {count > 99 ? "99+" : count}
+      </span>
+      {/* The space lives outside the span: an sr-only element's own leading space is dropped from the name. */}
+      {" "}
+      <span className="sr-only">({pendingLabel(count)})</span>
+    </>
+  );
+}
+
 /** Menu of the sections the role can open (same list as the routes). */
 function MainNav({ role, onNavigate }: MainNavProps) {
+  // Same query (and cache) as the Aprobaciones page; roles that cannot open
+  // that page never call the endpoint.
+  const pendingApprovals = usePendingApprovals({ enabled: canAccess(ROUTES.approvals, role) });
+  const pendingCount = pendingApprovals.data?.length ?? 0;
+
   return (
     <nav aria-label="Principal">
       <ul className="space-y-1">
@@ -35,8 +74,13 @@ function MainNav({ role, onNavigate }: MainNavProps) {
                 )
               }
             >
-              <Icon className="size-4 shrink-0" aria-hidden="true" />
-              {label}
+              {({ isActive }) => (
+                <>
+                  <Icon className="size-4 shrink-0" aria-hidden="true" />
+                  {label}
+                  {to === ROUTES.approvals ? <PendingCount count={pendingCount} isActive={isActive} /> : null}
+                </>
+              )}
             </NavLink>
           </li>
         ))}
