@@ -3,6 +3,13 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vitest/config";
 
+// Tests run as if the browser were in Monterrey (UTC-6), where formatting a
+// date-only value in local time would show the day before. Set here, before
+// Vitest spawns its workers, so every test file inherits it.
+if (process.env.VITEST) {
+  process.env.TZ = "America/Monterrey";
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), tailwindcss()],
