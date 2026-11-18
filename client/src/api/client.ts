@@ -12,12 +12,15 @@ export class ApiError extends Error {
   /** HTTP status, or 0 when the request never got a response (network error). */
   readonly status: number;
   readonly details: string[];
+  /** Machine-readable reason, when the API sends one (e.g. "OVERLAP"). */
+  readonly code: string | undefined;
 
-  constructor(status: number, message: string, details: string[] = []) {
+  constructor(status: number, message: string, details: string[] = [], code?: string) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.details = details;
+    this.code = code;
   }
 
   get isNetworkError(): boolean {
@@ -101,6 +104,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
       response.status,
       errorBody?.error ?? defaultMessageFor(response.status),
       errorBody?.details ?? [],
+      typeof errorBody?.code === "string" ? errorBody.code : undefined,
     );
   }
 
