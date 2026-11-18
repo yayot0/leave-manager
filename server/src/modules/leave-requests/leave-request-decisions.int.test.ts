@@ -696,6 +696,7 @@ describe("balance revalidation on approve", () => {
     const res = await act(org.cookies.jefeA, lr.id, "approve");
 
     expect(res.status).toBe(422);
+    expect(res.body.code).toBe("INSUFFICIENT_BALANCE");
     expect(res.body.error).toMatch(/Saldo insuficiente/);
     expect(res.body.error).toMatch(/-1/);
     expect(await snapshot(lr.id)).toEqual(before);
@@ -1186,5 +1187,339 @@ describe("visibility is checked before the transaction", () => {
     expect(long.body.details).toEqual(expect.arrayContaining([expect.stringMatching(/[Ii]d/)]));
     const blank = await act(org.cookies.jefeA, "%20%20", "approve");
     expect(blank.status).toBe(400);
+  });
+});
+
+describe("GET /api/leave-requests/:id requesterBalance (decision context for the decider)", () => {
+  /*
+   * a1 was hired 2023-02-01 and "today" is 2026-11-11, so the current
+   * anniversary period is 2026-02-01..2027-01-31 (3 years done => 16 days) and
+   * the next one is 2027-02-01..2028-01-31 (4 years => 18 days).
+   */
+  let org: Org;
+  beforeEach(async () => {
+    org = await createOrg();
+  });
+
+  const balanceOf = (res: request.Response) => res.body.leaveRequest.requesterBalance;
+
+  it("the direct manager gets exact values that account for other PENDING/APPROVED requests and adjustments of the same period", async () => {
+    const lr = await requestRow(org, org.a1.id); // 2026-11-16..20, 5 days PENDING
+    await requestRow(org, org.a1.id, { start: "2026-12-07", end: "2026-12-09", businessDays: 3 }); // PENDING
+    await requestRow(org, org.a1.id, {
+      status: "APPROVED", deciderId: org.jefeA.id, start: "2026-12-14", end: "2026-12-15", businessDays: 2,
+    });
+    // Noise that must not count in this period:
+    await requestRow(org, org.a1.id, {
+      status: "REJECTED", deciderId: org.jefeA.id, start: "2026-12-21", end: "2026-12-21", businessDays: 1,
+    });
+    await requestRow(org, org.a1.id, { status: "CANCELLED", start: "2026-12-22", end: "2026-12-22", businessDays: 1 });
+    await requestRow(org, org.a1.id, {
+      leaveTypeId: org.sick.id, start: "2027-01-04", end: "2027-01-04", businessDays: 1,
+    }); // does not count against the balance
+    await requestRow(org, org.a1.id, { start: "2027-02-01", end: "2027-02-03", businessDays: 3 }); // next period
+    await createAdjustment(org.a1.id, 2, "2026-06-01"); // this period
+    await createAdjustment(org.a1.id, -4, "2025-12-01"); // previous period, ignored
+    await createAdjustment(org.a1.id, -4, "2027-03-01"); // next period, ignored
+
+    const res = await detail(org.cookies.jefeA, lr.id);
+
+    expect(res.status).toBe(200);
+    // 16 earned + 2 adjustment - 5 (this) - 3 (pending) - 2 (approved) = 8
+    expect(balanceOf(res)).toEqual({
+      period: { start: "2026-02-01", end: "2027-01-31" },
+      availableWithoutRequest: 13,
+      availableAfterApproval: 8,
+      blocksApproval: false,
+    });
+
+    // Same numbers the employee sees in their own balance (same period).
+    const me = (await request(app).get("/api/me/balance").set("Cookie", org.cookies.a1)).body.balance;
+    expect(me.available).toBe(8);
+  });
+
+  it("availableWithoutRequest - availableAfterApproval equals the request's businessDays", async () => {
+    const lr = await requestRow(org, org.a1.id, { start: "2026-11-16", end: "2026-11-27", businessDays: 10 });
+    const b = balanceOf(await detail(org.cookies.jefeA, lr.id));
+    expect(b.availableWithoutRequest - b.availableAfterApproval).toBe(10);
+    expect(b).toMatchObject({ availableWithoutRequest: 16, availableAfterApproval: 6 });
+  });
+
+  it("an overdue PENDING request (started yesterday) is still decidable, so its decider gets the balance", async () => {
+    const lr = await requestRow(org, org.a1.id, { start: "2026-11-10", end: "2026-11-10", businessDays: 1 });
+    const res = await detail(org.cookies.jefeA, lr.id);
+    expect(res.body.leaveRequest.isOverdue).toBe(true);
+    expect(balanceOf(res)).toMatchObject({ availableWithoutRequest: 16, availableAfterApproval: 15 });
+  });
+
+  // --- Who does NOT get it -------------------------------------------------
+
+  it("the requester themself gets requesterBalance: null (the key is present, not omitted)", async () => {
+    const lr = await requestRow(org, org.a1.id);
+    const res = await detail(org.cookies.a1, lr.id);
+    expect(res.status).toBe(200);
+    expect(res.body.leaveRequest).toHaveProperty("requesterBalance", null);
+  });
+
+  it("a manager viewing their own PENDING request gets null; their own manager (director) gets it", async () => {
+    const lr = await requestRow(org, org.jefeA.id);
+    expect(balanceOf(await detail(org.cookies.jefeA, lr.id))).toBeNull();
+    expect(balanceOf(await detail(org.cookies.director, lr.id))).not.toBeNull();
+  });
+
+  it("HR who can only view (the employee has an active manager) gets null", async () => {
+    const lr = await requestRow(org, org.a1.id);
+    const res = await detail(org.cookies.hr1, lr.id);
+    expect(res.status).toBe(200);
+    expect(res.body.leaveRequest.permissions.canApprove).toBe(false);
+    expect(balanceOf(res)).toBeNull();
+  });
+
+  it("another HR (hr2) viewing hr1's request gets null, because hr1 has an active manager", async () => {
+    const lr = await requestRow(org, org.hr1.id);
+    expect(balanceOf(await detail(org.cookies.hr2, lr.id))).toBeNull();
+  });
+
+  it("a manager of another team gets 404 with only the error in the body (no balance leaked)", async () => {
+    const lr = await requestRow(org, org.a1.id);
+    const res = await detail(org.cookies.jefeB, lr.id);
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Solicitud no encontrada" });
+    expect(JSON.stringify(res.body)).not.toMatch(/requesterBalance|available/);
+  });
+
+  it("a teammate gets 404 with only the error in the body", async () => {
+    const lr = await requestRow(org, org.a1.id);
+    const res = await detail(org.cookies.a2, lr.id);
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: "Solicitud no encontrada" });
+  });
+
+  it.each(["approve", "reject"] as const)(
+    "the response of %s has requesterBalance: null (no longer PENDING)",
+    async (action) => {
+      const lr = await requestRow(org, org.a1.id);
+      const res = await act(org.cookies.jefeA, lr.id, action);
+      expect(res.status).toBe(200);
+      expect(res.body.leaveRequest).toHaveProperty("requesterBalance", null);
+    },
+  );
+
+  it("the response of cancel (requester) has requesterBalance: null", async () => {
+    const lr = await requestRow(org, org.a1.id);
+    const res = await act(org.cookies.a1, lr.id, "cancel");
+    expect(res.status).toBe(200);
+    expect(res.body.leaveRequest).toHaveProperty("requesterBalance", null);
+  });
+
+  it.each(["approve", "reject"] as const)(
+    "the past decider viewing the request after %s gets null",
+    async (action) => {
+      const lr = await requestRow(org, org.a1.id);
+      expect((await act(org.cookies.jefeA, lr.id, action)).status).toBe(200);
+      const res = await detail(org.cookies.jefeA, lr.id);
+      expect(res.status).toBe(200);
+      expect(balanceOf(res)).toBeNull();
+    },
+  );
+
+  it("the past decider still gets null after the requester changed team (visible only for audit)", async () => {
+    const lr = await requestRow(org, org.a1.id);
+    expect((await act(org.cookies.jefeA, lr.id, "approve")).status).toBe(200);
+    await prisma.user.update({ where: { id: org.a1.id }, data: { managerId: org.jefeB.id } });
+    const res = await detail(org.cookies.jefeA, lr.id);
+    expect(res.status).toBe(200);
+    expect(balanceOf(res)).toBeNull();
+  });
+
+  it("after reassigning a PENDING request's requester, the old manager gets 404 and the new one gets the balance", async () => {
+    const lr = await requestRow(org, org.a1.id);
+    await prisma.user.update({ where: { id: org.a1.id }, data: { managerId: org.jefeB.id } });
+    expect((await detail(org.cookies.jefeA, lr.id)).status).toBe(404);
+    expect(balanceOf(await detail(org.cookies.jefeB, lr.id))).toMatchObject({ availableAfterApproval: 11 });
+  });
+
+  // --- HR as fallback decider ----------------------------------------------
+
+  it("HR gets the balance when the requester's manager is inactive", async () => {
+    const lr = await requestRow(org, org.c1.id);
+    const res = await detail(org.cookies.hr1, lr.id);
+    expect(res.body.leaveRequest.permissions.canApprove).toBe(true);
+    expect(balanceOf(res)).toEqual({
+      period: { start: "2026-02-01", end: "2027-01-31" },
+      availableWithoutRequest: 16,
+      availableAfterApproval: 11,
+      blocksApproval: false,
+    });
+  });
+
+  it("HR gets the balance when the requester has no manager (the director)", async () => {
+    const lr = await requestRow(org, org.director.id);
+    expect(balanceOf(await detail(org.cookies.hr2, lr.id))).toMatchObject({ availableAfterApproval: 11 });
+  });
+
+  it("when a manager is deactivated, HR starts receiving the balance for their team's PENDING requests", async () => {
+    const lr = await requestRow(org, org.b1.id);
+    expect(balanceOf(await detail(org.cookies.hr1, lr.id))).toBeNull();
+    await prisma.user.update({ where: { id: org.jefeB.id }, data: { isActive: false } });
+    expect(balanceOf(await detail(org.cookies.hr1, lr.id))).not.toBeNull();
+  });
+
+  it("HR who is a direct manager gets it for their report; another HR does not", async () => {
+    const e = await createUser({ managerId: org.hr1.id });
+    const lr = await requestRow(org, e.id);
+    expect(balanceOf(await detail(org.cookies.hr1, lr.id))).not.toBeNull();
+    expect(balanceOf(await detail(org.cookies.hr2, lr.id))).toBeNull();
+  });
+
+  // --- Leave types that do not use the balance -----------------------------
+
+  it("a leave type that does not count against the balance (sick) gives null even for the decider", async () => {
+    const lr = await requestRow(org, org.a1.id, { leaveTypeId: org.sick.id });
+    const res = await detail(org.cookies.jefeA, lr.id);
+    expect(res.body.leaveRequest.permissions.canApprove).toBe(true);
+    expect(balanceOf(res)).toBeNull();
+  });
+
+  it("a sick request does not change the vacation balance shown for a PENDING vacation request", async () => {
+    await requestRow(org, org.a1.id, { leaveTypeId: org.sick.id, start: "2026-12-07", end: "2026-12-11", businessDays: 5 });
+    const lr = await requestRow(org, org.a1.id);
+    expect(balanceOf(await detail(org.cookies.jefeA, lr.id))).toMatchObject({
+      availableWithoutRequest: 16, availableAfterApproval: 11,
+    });
+  });
+
+  // --- Negative balance and coherence with approve (422) -------------------
+
+  it("a negative adjustment that leaves available = -1 gives blocksApproval: true, and approving returns 422", async () => {
+    const lr = await requestRow(org, org.a1.id, { start: "2026-11-16", end: "2026-11-27", businessDays: 10 });
+    await createAdjustment(org.a1.id, -7, "2026-06-01"); // 16 - 7 - 10 = -1
+
+    const b = balanceOf(await detail(org.cookies.jefeA, lr.id));
+    expect(b).toEqual({
+      period: { start: "2026-02-01", end: "2027-01-31" },
+      availableWithoutRequest: 9,
+      availableAfterApproval: -1,
+      blocksApproval: true,
+    });
+
+    expect((await act(org.cookies.jefeA, lr.id, "approve")).status).toBe(422);
+  });
+
+  it("exactly 0 available after approval gives blocksApproval: false, and approving returns 200", async () => {
+    const lr = await requestRow(org, org.a1.id, { start: "2026-11-16", end: "2026-11-27", businessDays: 10 });
+    await createAdjustment(org.a1.id, -6, "2026-06-01"); // 16 - 6 - 10 = 0
+
+    const b = balanceOf(await detail(org.cookies.jefeA, lr.id));
+    expect(b).toMatchObject({ availableWithoutRequest: 10, availableAfterApproval: 0, blocksApproval: false });
+
+    expect((await act(org.cookies.jefeA, lr.id, "approve")).status).toBe(200);
+  });
+
+  it("a negative period blocks every PENDING of that period; rejecting one unblocks the other", async () => {
+    const big = await requestRow(org, org.a1.id, { start: "2026-11-16", end: "2026-11-27", businessDays: 10 });
+    const small = await requestRow(org, org.a1.id, { start: "2026-12-07", end: "2026-12-09", businessDays: 3 });
+    await createAdjustment(org.a1.id, -5, "2026-06-01"); // 16 - 5 - 13 = -2
+
+    expect(balanceOf(await detail(org.cookies.jefeA, big.id)).blocksApproval).toBe(true);
+    expect(balanceOf(await detail(org.cookies.jefeA, small.id)).blocksApproval).toBe(true);
+    expect((await act(org.cookies.jefeA, small.id, "approve")).status).toBe(422);
+
+    expect((await act(org.cookies.jefeA, big.id, "reject")).status).toBe(200);
+    const after = balanceOf(await detail(org.cookies.jefeA, small.id));
+    expect(after).toMatchObject({ availableWithoutRequest: 11, availableAfterApproval: 8, blocksApproval: false });
+    expect((await act(org.cookies.jefeA, small.id, "approve")).status).toBe(200);
+  });
+
+  it("an employee before their first anniversary (0 earned) shows a negative balance that blocks approval, matching 422", async () => {
+    const newbie = await createUser({ managerId: org.jefeA.id, hireDate: "2026-06-01" });
+    const lr = await requestRow(org, newbie.id, { start: "2026-11-16", end: "2026-11-17", businessDays: 2 });
+    const b = balanceOf(await detail(org.cookies.jefeA, lr.id));
+    expect(b).toEqual({
+      period: { start: "2026-06-01", end: "2027-05-31" },
+      availableWithoutRequest: 0,
+      availableAfterApproval: -2,
+      blocksApproval: true,
+    });
+    expect((await act(org.cookies.jefeA, lr.id, "approve")).status).toBe(422);
+  });
+
+  // --- Period of the startDate ---------------------------------------------
+
+  it("a request in the next period shows that period (and its 18 days), not the current one", async () => {
+    await requestRow(org, org.a1.id); // 5 days in the current period, unrelated
+    await createAdjustment(org.a1.id, -16, "2026-06-01"); // current period now -5, unrelated
+    const lr = await requestRow(org, org.a1.id, { start: "2027-02-01", end: "2027-02-05", businessDays: 5 });
+
+    const b = balanceOf(await detail(org.cookies.jefeA, lr.id));
+    expect(b).toEqual({
+      period: { start: "2027-02-01", end: "2028-01-31" },
+      availableWithoutRequest: 18,
+      availableAfterApproval: 13,
+      blocksApproval: false,
+    });
+    expect((await act(org.cookies.jefeA, lr.id, "approve")).status).toBe(200);
+  });
+
+  it("a request that crosses the anniversary counts entirely in the period of its startDate", async () => {
+    // Fri 2027-01-29 .. Tue 2027-02-02 = 3 business days, starts in the current period.
+    const lr = await requestRow(org, org.a1.id, { start: "2027-01-29", end: "2027-02-02", businessDays: 3 });
+    expect(balanceOf(await detail(org.cookies.jefeA, lr.id))).toEqual({
+      period: { start: "2026-02-01", end: "2027-01-31" },
+      availableWithoutRequest: 16,
+      availableAfterApproval: 13,
+      blocksApproval: false,
+    });
+  });
+
+  it("a request that starts exactly on the anniversary belongs to the new period", async () => {
+    const lr = await requestRow(org, org.a1.id, { start: "2027-02-01", end: "2027-02-01", businessDays: 1 });
+    expect(balanceOf(await detail(org.cookies.jefeA, lr.id)).period).toEqual({ start: "2027-02-01", end: "2028-01-31" });
+  });
+
+  it("a request on the last day of the current period (day before the anniversary) belongs to the current period", async () => {
+    // 2027-01-31 is a Sunday; use Friday 2027-01-29 for a single business day.
+    const lr = await requestRow(org, org.a1.id, { start: "2027-01-29", end: "2027-01-29", businessDays: 1 });
+    expect(balanceOf(await detail(org.cookies.jefeA, lr.id)).period).toEqual({ start: "2026-02-01", end: "2027-01-31" });
+  });
+
+  it("hire date Feb 29 (leap year): in a non-leap year the period starts on Feb 28", async () => {
+    const leap = await createUser({ managerId: org.jefeA.id, hireDate: "2024-02-29" });
+    const lr = await requestRow(org, leap.id);
+    // 2 years completed on 2026-02-28 => 14 days; next anniversary 2027-02-28.
+    expect(balanceOf(await detail(org.cookies.jefeA, lr.id))).toEqual({
+      period: { start: "2026-02-28", end: "2027-02-27" },
+      availableWithoutRequest: 14,
+      availableAfterApproval: 9,
+      blocksApproval: false,
+    });
+  });
+
+  // --- Non-PENDING requests viewed by the manager --------------------------
+
+  it.each([
+    ["APPROVED (future)", "APPROVED", true],
+    ["REJECTED", "REJECTED", true],
+    ["CANCELLED (from PENDING)", "CANCELLED", false],
+    ["CANCELLED (after approval)", "CANCELLED", true],
+  ] as const)("a %s request viewed by the direct manager gives null", async (_label, status, decided) => {
+    const lr = await requestRow(org, org.a1.id, { status, ...(decided ? { deciderId: org.jefeA.id } : {}) });
+    const res = await detail(org.cookies.jefeA, lr.id);
+    expect(res.status).toBe(200);
+    expect(balanceOf(res)).toBeNull();
+  });
+
+  it("a request that is not PENDING gives null for HR even when HR would be the decider", async () => {
+    const lr = await requestRow(org, org.c1.id, { status: "APPROVED", deciderId: org.hr1.id });
+    expect(balanceOf(await detail(org.cookies.hr1, lr.id))).toBeNull();
+    expect(balanceOf(await detail(org.cookies.hr2, lr.id))).toBeNull();
+  });
+
+  it("reading the detail with requesterBalance writes nothing (no events, request unchanged)", async () => {
+    const lr = await requestRow(org, org.a1.id);
+    const before = await snapshot(lr.id);
+    await detail(org.cookies.jefeA, lr.id);
+    expect(await snapshot(lr.id)).toEqual(before);
+    expect(await prisma.requestEvent.count()).toBe(0);
   });
 });

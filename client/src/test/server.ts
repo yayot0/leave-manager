@@ -11,7 +11,7 @@ import { buildBalance, buildPreview, buildUser, PERSONAL_TYPE, VACATION_TYPE, VA
  * Default state: nobody is logged in. A test logs a user in with
  * `mockSession(user)` or overrides any endpoint with `server.use(...)`.
  * The data endpoints answer with a neutral default (a balance, no requests,
- * two leave types, a clean preview) so pages render without extra setup.
+ * two leave types, a clean preview, nothing to approve) so pages render without extra setup.
  */
 export const handlers = [
   http.get("/api/auth/me", () => HttpResponse.json({ error: "No autenticado" }, { status: 401 })),
@@ -29,6 +29,7 @@ export const handlers = [
   http.get("/api/me/balance", () => HttpResponse.json({ balance: buildBalance() })),
   http.get("/api/leave-types", () => HttpResponse.json({ leaveTypes: [VACATION_TYPE, PERSONAL_TYPE] })),
   http.get("/api/leave-requests/mine", () => HttpResponse.json({ leaveRequests: [] })),
+  http.get("/api/leave-requests/pending-approvals", () => HttpResponse.json({ leaveRequests: [] })),
   http.get("/api/leave-requests/preview", () => HttpResponse.json({ preview: buildPreview() })),
 ];
 

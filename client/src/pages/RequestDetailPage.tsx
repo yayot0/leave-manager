@@ -1,14 +1,30 @@
-import type { ReactNode } from "react";
-import { Link, useParams } from "react-router";
-import { ArrowLeft, Ban, CircleCheck, CircleX, FilePlus, Pencil, SearchX, type LucideIcon } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
+import { Link, useLocation, useParams } from "react-router";
+import {
+  ArrowLeft,
+  Ban,
+  CalendarClock,
+  CircleCheck,
+  CircleX,
+  FilePlus,
+  Pencil,
+  SearchX,
+  TriangleAlert,
+  type LucideIcon,
+} from "lucide-react";
 import { ApiError } from "@/api/client";
-import type { LeaveRequestDetail, Person, RequestEvent, RequestEventAction } from "@/api/types";
-import { ROUTES } from "@/app/paths";
+import type { LeaveRequestDetail, Person, RequestEvent, RequestEventAction, RequesterBalance } from "@/api/types";
+import { canAccess, ROUTES } from "@/app/navigation";
+import { cameFromApprovals } from "@/app/paths";
 import { useCurrentUser } from "@/auth/current-user";
 import { useLeaveRequest } from "@/hooks/leave-requests";
-import { formatDate, formatDateTime } from "@/lib/dates";
+import { formatDate, formatDateRange, formatDateTime } from "@/lib/dates";
+import { formatDays } from "@/lib/numbers";
 import { cn } from "@/lib/utils";
 import { CancelRequestDialog } from "@/components/CancelRequestDialog";
+import { DecisionDialog, type Decision } from "@/components/DecisionDialog";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/PageHeading";
 import { LoadingBlock, QueryError } from "@/components/QueryStatus";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -72,12 +88,107 @@ function Timeline({ events, currentUserId }: { events: RequestEvent[]; currentUs
   );
 }
 
-function DetailContent({ request }: { request: LeaveRequestDetail }) {
+const DECIDED_MESSAGES: Record<Decision, string> = {
+  approve: "Aprobaste la solicitud. El empleado ya puede verla como aprobada.",
+  reject: "Rechazaste la solicitud. El empleado verá el motivo que escribiste.",
+};
+
+/** What the decider needs before approving: the requester's balance in the request's period. */
+function RequesterBalanceSummary({ balance, requester }: { balance: RequesterBalance; requester: Person }) {
+  const headingId = useId();
+  return (
+    <section aria-labelledby={headingId} className="space-y-3 rounded-lg border p-4">
+      <div className="space-y-0.5">
+        <h3 id={headingId} className="font-medium">
+          Saldo de vacaciones de {fullName(requester)}
+        </h3>
+        <p className="text-sm text-muted-foreground">
+          Periodo del {formatDateRange(balance.period.start, balance.period.end)}
+        </p>
+      </div>
+      <dl className="grid gap-4 sm:grid-cols-2">
+        <Field label="Disponibles sin esta solicitud">{formatDays(balance.availableWithoutRequest)}</Field>
+        <Field label="Si la apruebas, le quedan">{formatDays(balance.availableAfterApproval)}</Field>
+      </dl>
+      {/* Static warnings use role={undefined}: role="alert" is for messages that appear after an action. */}
+      {balance.blocksApproval ? (
+        <Alert variant="destructive" role={undefined}>
+          <TriangleAlert aria-hidden="true" />
+          <AlertTitle>El saldo de este periodo ya es negativo</AlertTitle>
+          <AlertDescription>
+            Ninguna solicitud de vacaciones de este periodo se puede aprobar hasta que se rechace o cancele alguna, o
+            RH corrija el saldo. Puedes rechazarla.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+    </section>
+  );
+}
+
+const NO_PERMISSIONS: LeaveRequestDetail["permissions"] = { canApprove: false, canReject: false, canCancel: false };
+
+/**
+ * Shown when a refresh failed but the last good data is still on screen
+ * (e.g. after a decision error the request is no longer visible: 404).
+ */
+function RefreshError({ error, onRetry, isRetrying }: { error: Error; onRetry: () => void; isRetrying: boolean }) {
+  const lostAccess = error instanceof ApiError && error.status === 404;
+  return (
+    <Alert variant="destructive" role={undefined}>
+      <TriangleAlert aria-hidden="true" />
+      <AlertTitle>{lostAccess ? "Ya no tienes acceso a esta solicitud" : "No se pudo actualizar la solicitud"}</AlertTitle>
+      <AlertDescription>
+        <p>
+          {lostAccess
+            ? "Puede que el empleado haya cambiado de jefe o que la solicitud ya no exista. Abajo ves cómo estaba la última vez que la cargaste."
+            : `${error.message} Abajo ves cómo estaba la última vez que la cargaste.`}
+        </p>
+        {lostAccess ? null : (
+          <Button variant="outline" size="sm" className="mt-2" onClick={onRetry} disabled={isRetrying}>
+            {isRetrying ? "Reintentando…" : "Reintentar"}
+          </Button>
+        )}
+      </AlertDescription>
+    </Alert>
+  );
+}
+
+interface DetailContentProps {
+  request: LeaveRequestDetail;
+  /** A refresh failed: the data is outdated, so no action is offered. */
+  refreshError: Error | null;
+  onRetry: () => void;
+  isRetrying: boolean;
+}
+
+function DetailContent({ request, refreshError, onRetry, isRetrying }: DetailContentProps) {
   const user = useCurrentUser();
   const isOwn = request.requester.id === user.id;
+  // Outdated data never offers actions; the dialogs already open stay mounted anyway.
+  const { canApprove, canReject, canCancel } = refreshError ? NO_PERMISSIONS : request.permissions;
+  const canDecide = canApprove || canReject;
+  // The API says whether approving would fail for lack of balance; never recomputed here.
+  const approveAllowed = canApprove && !request.requesterBalance?.blocksApproval;
+  const [decided, setDecided] = useState<Decision | null>(null);
 
   return (
     <div className="space-y-6">
+      {/*
+        Live region always mounted (empty until a decision): screen readers
+        announce content added to an existing region, not a region that
+        appears already filled.
+      */}
+      <div role="status">
+        {decided ? (
+          <Alert role={undefined}>
+            <CircleCheck aria-hidden="true" />
+            <AlertDescription>{DECIDED_MESSAGES[decided]}</AlertDescription>
+          </Alert>
+        ) : null}
+      </div>
+
+      {refreshError ? <RefreshError error={refreshError} onRetry={onRetry} isRetrying={isRetrying} /> : null}
+
       <Card>
         <CardHeader>
           <CardTitle className="text-lg">
@@ -88,14 +199,25 @@ function DetailContent({ request }: { request: LeaveRequestDetail }) {
           </CardAction>
         </CardHeader>
         <CardContent className="space-y-6">
+          {canDecide && request.isOverdue ? (
+            <Alert role={undefined}>
+              <CalendarClock aria-hidden="true" />
+              <AlertTitle>Vencida: ya empezó y sigue pendiente</AlertTitle>
+              <AlertDescription>
+                Empezaba el {formatDate(request.startDate)}. Todavía puedes decidirla; apruébala solo si esas fechas
+                ya estaban autorizadas.
+              </AlertDescription>
+            </Alert>
+          ) : null}
+
           <dl className="grid gap-4 sm:grid-cols-2">
+            {!isOwn ? <Field label="Solicitante">{fullName(request.requester)}</Field> : null}
             <Field label="Del">{formatDate(request.startDate)}</Field>
             <Field label="Al">{formatDate(request.endDate)}</Field>
             <Field label="Días hábiles">{request.businessDays}</Field>
-            <Field label="Descuenta de tus vacaciones">
+            <Field label={isOwn ? "Descuenta de tus vacaciones" : "Descuenta de sus vacaciones"}>
               {request.leaveType.countsAgainstVacationBalance ? "Sí" : "No"}
             </Field>
-            {!isOwn ? <Field label="Solicitante">{fullName(request.requester)}</Field> : null}
             <Field label="Motivo">{request.reason ?? <span className="text-muted-foreground">Sin motivo</span>}</Field>
             {/* A CANCELLED request with a decider was approved first, then cancelled. */}
             {request.decider ? (
@@ -111,9 +233,18 @@ function DetailContent({ request }: { request: LeaveRequestDetail }) {
             {request.decisionNote ? <Field label="Nota de la decisión">{request.decisionNote}</Field> : null}
           </dl>
 
-          {/* Always mounted: the dialog must survive canCancel turning false while it is open. */}
-          <div className={cn(request.permissions.canCancel && "flex justify-end border-t pt-4")}>
-            <CancelRequestDialog request={request} canCancel={request.permissions.canCancel} />
+          {canDecide && request.requesterBalance ? (
+            <RequesterBalanceSummary balance={request.requesterBalance} requester={request.requester} />
+          ) : null}
+
+          {/*
+            Always mounted: each dialog must survive its permission turning
+            false while it is open (success, or a refresh after an error).
+          */}
+          <div className={cn((canCancel || canDecide) && "flex flex-wrap justify-end gap-2 border-t pt-4")}>
+            <CancelRequestDialog request={request} canCancel={canCancel} />
+            <DecisionDialog decision="reject" request={request} allowed={canReject} onDecided={setDecided} />
+            <DecisionDialog decision="approve" request={request} allowed={approveAllowed} onDecided={setDecided} />
           </div>
         </CardContent>
       </Card>
@@ -146,22 +277,50 @@ function NotFound() {
   );
 }
 
+/**
+ * Where "Volver" goes: Aprobaciones when the detail was opened from there,
+ * or when someone else's request is on screen (a decider or HR, who reach
+ * it from Aprobaciones); Mis solicitudes otherwise. Only for roles that can
+ * open Aprobaciones.
+ */
+function useBackLink(request: LeaveRequestDetail | undefined): { to: string; label: string } {
+  const user = useCurrentUser();
+  const location = useLocation();
+  const othersRequest = request !== undefined && request.requester.id !== user.id;
+  if ((cameFromApprovals(location.state) || othersRequest) && canAccess(ROUTES.approvals, user.role)) {
+    return { to: ROUTES.approvals, label: "Volver a Aprobaciones" };
+  }
+  return { to: ROUTES.myRequests, label: "Volver a Mis solicitudes" };
+}
+
 export function RequestDetailPage() {
   // Always defined: this component is only rendered by the "/solicitudes/:id" route.
   const { id = "" } = useParams();
   const request = useLeaveRequest(id);
+  const back = useBackLink(request.data);
 
   return (
     <>
-      <Link to={ROUTES.myRequests} className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "mb-4 -ml-2")}>
+      <Link to={back.to} className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "mb-4 -ml-2")}>
         <ArrowLeft aria-hidden="true" />
-        Volver a Mis solicitudes
+        {back.label}
       </Link>
       {/* Rendered in every state, so AppLayout can always move focus to the h1. */}
       <PageHeading title="Detalle de solicitud" />
-      {request.isPending ? (
+      {request.data ? (
+        // Data first: a failed refresh (e.g. after a decision error) must not
+        // unmount the detail and the dialog that is showing that error.
+        <DetailContent
+          // A different request starts fresh (success message, dialogs).
+          key={request.data.id}
+          request={request.data}
+          refreshError={request.isError ? request.error : null}
+          onRetry={() => void request.refetch()}
+          isRetrying={request.isFetching}
+        />
+      ) : request.isPending ? (
         <LoadingBlock label="Cargando la solicitud…" lines={2} />
-      ) : request.isError ? (
+      ) : (
         request.error instanceof ApiError && request.error.status === 404 ? (
           <NotFound />
         ) : (
@@ -172,8 +331,6 @@ export function RequestDetailPage() {
             isRetrying={request.isFetching}
           />
         )
-      ) : (
-        <DetailContent request={request.data} />
       )}
     </>
   );

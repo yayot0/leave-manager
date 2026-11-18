@@ -2,7 +2,8 @@ import { useId, useRef, useState } from "react";
 import { CircleAlert } from "lucide-react";
 import { ApiError } from "@/api/client";
 import type { LeaveRequest, LeaveRequestDetail } from "@/api/types";
-import { useCancelLeaveRequest } from "@/hooks/leave-requests";
+import { isConflictError, useCancelLeaveRequest } from "@/hooks/leave-requests";
+import { useStickyDialog } from "@/hooks/use-sticky-dialog";
 import { formatDateRange, formatShortDate } from "@/lib/dates";
 import { formatBusinessDays } from "@/lib/numbers";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -54,57 +55,40 @@ function cancelErrorMessage(error: Error): { title: string; message: string } {
  * "Cancelar" button plus its confirmation dialog. The button shows only when
  * the API says `canCancel` (this component never re-implements the state
  * machine), but the dialog stays mounted while it is open or closing, even
- * if `canCancel` turns false meanwhile (success, or a 409 refresh). That way
- * the mutation's callbacks still run, an error stays readable, and focus is
- * moved on purpose instead of falling to <body>.
+ * if `canCancel` turns false meanwhile (success, or a 409 refresh): see
+ * `useStickyDialog`.
  */
 export function CancelRequestDialog({ request, canCancel, size = "default" }: CancelRequestDialogProps) {
-  const [open, setOpen] = useState(false);
-  // True from opening until the close animation has finished.
-  const [active, setActive] = useState(false);
   const [note, setNote] = useState("");
   const cancel = useCancelLeaveRequest();
-  // After a successful cancel the trigger disappears (canCancel turns false),
-  // so focus goes to the page's heading instead of being lost.
-  const cancelled = useRef(false);
+  const { active, triggerRef, finalFocus, closeAfterSuccess, rootProps } = useStickyDialog({
+    isBusy: cancel.isPending,
+    onOpen: () => {
+      setNote("");
+      cancel.reset();
+    },
+  });
+  const backRef = useRef<HTMLButtonElement>(null);
+  // After a 409 it can no longer be cancelled: only "Volver" is left.
+  const conflict = isConflictError(cancel.error);
+  const locked = cancel.isPending || conflict;
   const noteId = useId();
   const noteHintId = useId();
 
   const range = formatDateRange(request.startDate, request.endDate, formatShortDate);
   const returnsDays = request.leaveType.countsAgainstVacationBalance;
 
-  const handleOpenChange = (nextOpen: boolean) => {
-    // A pending cancellation must finish before closing (it may still fail).
-    if (!nextOpen && cancel.isPending) {
-      return;
-    }
-    if (nextOpen) {
-      setNote("");
-      cancel.reset();
-      cancelled.current = false;
-      setActive(true);
-    }
-    setOpen(nextOpen);
-  };
-
-  // Back to the trigger as usual, unless it is gone (cancelled, or a refresh
-  // removed it): then the page's heading.
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const finalFocus = (): HTMLElement | boolean => {
-    const triggerGone = cancelled.current || !triggerRef.current?.isConnected;
-    return (triggerGone && document.querySelector<HTMLElement>("#main h1")) || true;
-  };
-
   const handleConfirm = () => {
-    if (cancel.isPending) {
+    if (locked) {
       return;
     }
     cancel.mutate(
       { id: request.id, note: note.trim() || undefined },
       {
-        onSuccess: () => {
-          cancelled.current = true;
-          setOpen(false);
+        onSuccess: closeAfterSuccess,
+        // The focused confirm button becomes disabled: move focus to the one way out.
+        onError: (error) => {
+          if (isConflictError(error)) backRef.current?.focus();
         },
       },
     );
@@ -117,13 +101,7 @@ export function CancelRequestDialog({ request, canCancel, size = "default" }: Ca
   }
 
   return (
-    <AlertDialog
-      open={open}
-      onOpenChange={handleOpenChange}
-      onOpenChangeComplete={(isOpen) => {
-        if (!isOpen) setActive(false);
-      }}
-    >
+    <AlertDialog {...rootProps}>
       {canCancel ? (
         <AlertDialogTrigger
           render={
@@ -162,7 +140,7 @@ export function CancelRequestDialog({ request, canCancel, size = "default" }: Ca
             onChange={(event) => setNote(event.target.value)}
             maxLength={NOTE_MAX_LENGTH}
             aria-describedby={noteHintId}
-            disabled={cancel.isPending}
+            disabled={locked}
           />
           <p id={noteHintId} className="text-xs text-muted-foreground">
             {note.length}/{NOTE_MAX_LENGTH} caracteres
@@ -178,8 +156,10 @@ export function CancelRequestDialog({ request, canCancel, size = "default" }: Ca
         ) : null}
 
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={cancel.isPending}>Volver</AlertDialogCancel>
-          <Button variant="destructive" onClick={handleConfirm} disabled={cancel.isPending}>
+          <AlertDialogCancel ref={backRef} disabled={cancel.isPending}>
+            Volver
+          </AlertDialogCancel>
+          <Button variant="destructive" onClick={handleConfirm} disabled={locked}>
             {cancel.isPending ? "Cancelando…" : "Sí, cancelar solicitud"}
           </Button>
         </AlertDialogFooter>

@@ -93,6 +93,21 @@ export interface RequestEvent {
   actor: Person;
 }
 
+/**
+ * The requester's vacation balance in the period of the request's start
+ * date. Only sent to whoever can decide the request now, and only for leave
+ * types that count against the balance; null otherwise.
+ */
+export interface RequesterBalance {
+  period: DateRange;
+  /** Available days without this request (what rejecting would leave). */
+  availableWithoutRequest: number;
+  /** Available days if it is approved (a PENDING request already reserves them). */
+  availableAfterApproval: number;
+  /** The period is already negative: approving would answer 422. */
+  blocksApproval: boolean;
+}
+
 /** GET /leave-requests/:id (also returned by approve/reject/cancel). */
 export interface LeaveRequestDetail extends Omit<LeaveRequest, "permissions"> {
   updatedAt: string;
@@ -100,7 +115,29 @@ export interface LeaveRequestDetail extends Omit<LeaveRequest, "permissions"> {
   decider: Person | null;
   events: RequestEvent[];
   isOverdue: boolean;
+  requesterBalance: RequesterBalance | null;
   permissions: { canApprove: boolean; canReject: boolean; canCancel: boolean };
+}
+
+/** An item of GET /leave-requests/pending-approvals (oldest start first, so overdue ones lead). */
+export interface PendingApproval {
+  id: string;
+  /** "YYYY-MM-DD" */
+  startDate: string;
+  /** "YYYY-MM-DD" */
+  endDate: string;
+  businessDays: number;
+  reason: string | null;
+  /** Instant (ISO with time). */
+  createdAt: string;
+  leaveType: LeaveType;
+  requester: Person;
+  /** PENDING whose start date already arrived (it can still be decided). */
+  isOverdue: boolean;
+}
+
+export interface PendingApprovalsResponse {
+  leaveRequests: PendingApproval[];
 }
 
 export interface LeaveRequestDetailResponse {

@@ -69,10 +69,38 @@ const decisionSelect = {
   leaveType: { select: { countsAgainstVacationBalance: true } },
 } satisfies Prisma.LeaveRequestSelect;
 
-function serializeDetail(row: DetailRow, actor: Actor, today: Date) {
+/**
+ * The requester's vacation balance in the period of the request's startDate,
+ * as the decider needs it: what is left without this request and what is
+ * left if it is approved. A PENDING request already reserves its days, so
+ * approving does not change `available`; rejecting gives them back.
+ */
+async function getDecisionBalance(row: DetailRow) {
+  const balance = await getVacationBalance(prisma, row.requester, row.startDate);
+  return {
+    period: { start: toISODate(balance.period.start), end: toISODate(balance.period.end) },
+    availableWithoutRequest: balance.available + row.businessDays,
+    availableAfterApproval: balance.available,
+    // Same check as approve (422): the client never recomputes it.
+    blocksApproval: balance.available < 0,
+  };
+}
+
+type DecisionBalance = Awaited<ReturnType<typeof getDecisionBalance>>;
+
+function isDecidable(row: DetailRow, actor: Actor): boolean {
+  return row.status === "PENDING" && canDecide(actor, row.requester);
+}
+
+function serializeDetail(
+  row: DetailRow,
+  actor: Actor,
+  today: Date,
+  requesterBalance: DecisionBalance | null,
+) {
   const { requester, deciderId: _deciderId, ...rest } = row;
   const isRequester = actor.id === requester.id;
-  const decidable = row.status === "PENDING" && canDecide(actor, requester);
+  const decidable = isDecidable(row, actor);
   return {
     ...rest,
     startDate: toISODate(row.startDate),
@@ -80,6 +108,10 @@ function serializeDetail(row: DetailRow, actor: Actor, today: Date) {
     // Only expose who asked, never their manager/hire data.
     requester: { id: requester.id, firstName: requester.firstName, lastName: requester.lastName },
     isOverdue: row.status === "PENDING" && hasStarted(row.startDate, today),
+    // Only for whoever can decide it right now, and only for leave types that
+    // use the vacation balance; null for everyone else (requester, HR that
+    // merely views it, the past decider).
+    requesterBalance,
     permissions: {
       canApprove: decidable,
       canReject: decidable,
@@ -99,7 +131,11 @@ export async function getLeaveRequestDetail(actor: Actor, id: string) {
   if (!row || !canView(actor, { requester: row.requester, deciderId: row.deciderId })) {
     throw new NotFoundError(NOT_FOUND_MESSAGE);
   }
-  return serializeDetail(row, actor, todayInTimeZone(env.APP_TIMEZONE));
+  const requesterBalance =
+    isDecidable(row, actor) && row.leaveType.countsAgainstVacationBalance
+      ? await getDecisionBalance(row)
+      : null;
+  return serializeDetail(row, actor, todayInTimeZone(env.APP_TIMEZONE), requesterBalance);
 }
 
 /**
@@ -214,10 +250,14 @@ export async function applyLeaveRequestAction(
       // if HR applied a negative adjustment after the request was created.
       const balance = await getVacationBalance(tx, request.requester, request.startDate);
       if (balance.available < 0) {
-        throw new UnprocessableEntityError(
+        const error = new UnprocessableEntityError(
           `Saldo insuficiente para aprobar: el periodo ${toISODate(balance.period.start)} a ` +
             `${toISODate(balance.period.end)} quedaría con ${balance.available} días`,
         );
+        // Same code as creating a request without balance, so clients react
+        // to the reason instead of the HTTP status or the message.
+        error.code = "INSUFFICIENT_BALANCE";
+        throw error;
       }
     }
 

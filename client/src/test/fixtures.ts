@@ -3,7 +3,9 @@ import type {
   LeaveRequestDetail,
   LeaveRequestPreview,
   LeaveType,
+  PendingApproval,
   Person,
+  RequesterBalance,
   Role,
   User,
   VacationBalance,
@@ -97,6 +99,7 @@ export function buildDetail(overrides: Partial<LeaveRequestDetail> = {}): LeaveR
       { id: "ev-1", action: "CREATED", note: null, createdAt: "2026-11-10T16:00:00.000Z", actor: EMPLOYEE_PERSON },
     ],
     isOverdue: false,
+    requesterBalance: null,
     permissions: { canApprove: false, canReject: false, canCancel: true },
     ...overrides,
   };
@@ -109,6 +112,40 @@ export function buildPreview(overrides: Partial<LeaveRequestPreview> = {}): Leav
     balance: { period: { start: "2026-03-15", end: "2027-03-14" }, available: 14, availableAfter: 11 },
     problems: [],
     canSubmit: true,
+    ...overrides,
+  };
+}
+
+/** Detail as the requester's manager sees it: can decide, with the requester's balance. */
+export function buildDecidableDetail(overrides: Partial<LeaveRequestDetail> = {}): LeaveRequestDetail {
+  return buildDetail({
+    requesterBalance: buildRequesterBalance(),
+    permissions: { canApprove: true, canReject: true, canCancel: false },
+    ...overrides,
+  });
+}
+
+export function buildRequesterBalance(overrides: Partial<RequesterBalance> = {}): RequesterBalance {
+  return {
+    period: { start: "2026-03-15", end: "2027-03-14" },
+    availableWithoutRequest: 14,
+    availableAfterApproval: 11,
+    blocksApproval: false,
+    ...overrides,
+  };
+}
+
+export function buildPendingApproval(overrides: Partial<PendingApproval> = {}): PendingApproval {
+  return {
+    id: "req-1",
+    startDate: "2026-12-01",
+    endDate: "2026-12-03",
+    businessDays: 3,
+    reason: "Viaje familiar",
+    createdAt: "2026-11-10T16:00:00.000Z",
+    leaveType: VACATION_TYPE,
+    requester: EMPLOYEE_PERSON,
+    isOverdue: false,
     ...overrides,
   };
 }

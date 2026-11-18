@@ -7,6 +7,8 @@ import type {
   LeaveRequestPreview,
   LeaveRequestPreviewResponse,
   LeaveRequestsResponse,
+  PendingApproval,
+  PendingApprovalsResponse,
 } from "./types";
 import type { PreviewInput } from "./query-keys";
 
@@ -20,6 +22,11 @@ const requestPath = (id: string) => `/leave-requests/${encodeURIComponent(id)}`;
 
 export async function listMyLeaveRequests(signal?: AbortSignal): Promise<LeaveRequest[]> {
   const { leaveRequests } = await apiFetch<LeaveRequestsResponse>("/leave-requests/mine", { signal });
+  return leaveRequests;
+}
+
+export async function listPendingApprovals(signal?: AbortSignal): Promise<PendingApproval[]> {
+  const { leaveRequests } = await apiFetch<PendingApprovalsResponse>("/leave-requests/pending-approvals", { signal });
   return leaveRequests;
 }
 
@@ -51,6 +58,23 @@ export async function cancelLeaveRequest(id: string, note?: string): Promise<Lea
   const { leaveRequest } = await apiFetch<LeaveRequestDetailResponse>(`${requestPath(id)}/cancel`, {
     method: "POST",
     body: note ? { note } : {},
+  });
+  return leaveRequest;
+}
+
+export async function approveLeaveRequest(id: string, note?: string): Promise<LeaveRequestDetail> {
+  const { leaveRequest } = await apiFetch<LeaveRequestDetailResponse>(`${requestPath(id)}/approve`, {
+    method: "POST",
+    body: note ? { note } : {},
+  });
+  return leaveRequest;
+}
+
+/** The API requires a non-empty note to reject. */
+export async function rejectLeaveRequest(id: string, note: string): Promise<LeaveRequestDetail> {
+  const { leaveRequest } = await apiFetch<LeaveRequestDetailResponse>(`${requestPath(id)}/reject`, {
+    method: "POST",
+    body: { note },
   });
   return leaveRequest;
 }

@@ -93,6 +93,19 @@ Frontend (desde `client/`):
 - `GET /api/leave-requests/mine` (y el POST) incluyen `permissions.canCancel`, calculado con
   `transition()`; el cliente no reimplementa la máquina de estados.
 
+## Saldo del solicitante al decidir
+- El detalle (`GET /api/leave-requests/:id`) trae `requesterBalance` para quien puede decidir
+  la solicitud en ese momento (PENDING + `canDecide`) y solo si el tipo descuenta vacaciones;
+  para cualquier otro (el solicitante, HR que solo mira, el decisor anterior) es `null`. Va en
+  el detalle y no en un endpoint aparte para reutilizar la misma comprobación de visibilidad
+  (404) y permisos, y porque el cliente lo refresca junto con el detalle tras cada acción.
+- Se calcula con `getVacationBalance` para el periodo del `startDate`:
+  `availableAfterApproval = available` (una PENDING ya reserva sus días),
+  `availableWithoutRequest = available + businessDays` (lo que queda si se rechaza) y
+  `blocksApproval = available < 0`, la misma condición del 422 al aprobar. El cliente oculta
+  "Aprobar" con `blocksApproval` y muestra el aviso; `permissions.canApprove` sigue siendo solo
+  autorización (coincide con `pending-approvals`).
+
 ## Saldo de vacaciones (periodo y fechas)
 - El saldo es por periodo de aniversario a aniversario (no año calendario).
 - Una solicitud cuenta en el periodo donde cae su `startDate`; un ajuste cuenta
@@ -173,9 +186,26 @@ Frontend (desde `client/`):
 - Rutas que no van en el menú (p. ej. `/solicitudes/:id`) van en `NAV_ITEMS` con
   `showInMenu: false`; `canAccess` las empata con `matchPath` (un segmento por parámetro,
   primero las estáticas) y sigue negando por defecto. Rutas con id: `requestDetailPath(id)`.
-- `CancelRequestDialog` sigue montado mientras está abierto o cerrándose aunque `canCancel`
-  pase a `false`, para que el error siga visible y el foco vaya al `h1` en vez de a `<body>`.
-  El mismo patrón aplica a futuros diálogos de aprobar/rechazar.
+- Los diálogos de acción (`CancelRequestDialog`, `DecisionDialog` para aprobar/rechazar) siguen
+  montados mientras están abiertos o cerrándose aunque su permiso pase a `false`, para que el
+  error siga visible y el foco vaya al `h1` en vez de a `<body>` (`useStickyDialog` en
+  `src/hooks/use-sticky-dialog.ts`). Tras 403/404/409/422 se refresca todo detrás del diálogo
+  (`useRequestActionMutation`); el diálogo muestra textos propios, no el mensaje de la API. El
+  saldo insuficiente al aprobar se reconoce por `code: "INSUFFICIENT_BALANCE"`, no por el 422.
+  Tras un 409 (`isConflictError`) reintentar nunca funcionaría: el botón de confirmar y la nota
+  se deshabilitan y el foco pasa a "Volver", la única salida.
+- El detalle se sigue mostrando mientras haya `data`, aunque un refresco falle (p. ej. 404
+  porque el empleado cambió de jefe): así no se desmonta el diálogo con su error. En ese caso se
+  avisa que los datos son viejos y no se ofrece ninguna acción.
+- Avisos fijos (saldo negativo, vencida) con `role={undefined}` en `Alert`: `role="alert"` es
+  solo para mensajes que aparecen tras una acción. Los mensajes de éxito van en una región
+  `role="status"` siempre montada.
+- Rechazar exige nota también en el cliente (vacía o solo espacios no se envía).
+- El contador de "Aprobaciones" del menú usa la misma query que la página
+  (`queryKeys.pendingApprovals`), así que `invalidateLeaveData` refresca ambos; solo se pide
+  para roles que pueden abrir Aprobaciones.
+- "Volver" del detalle: a Aprobaciones si se llegó desde ahí (`FROM_APPROVALS_STATE` como state
+  del router, nunca una URL) o si la solicitud es de otra persona; si no, a Mis solicitudes.
 - Logout a propósito: `useLogout` marca la salida como deliberada y `ProtectedRoute` redirige
   a login sin `from`. No depende del orden entre la navegación de React Router (que es una
   transition) y la actualización de TanStack Query, que no está garantizado.
@@ -186,13 +216,16 @@ Frontend (desde `client/`):
 - Tests: con MSW (`src/test/server.ts`), nunca reemplazando `fetch` a mano;
   `renderApp(ruta)` (`src/test/render.tsx`) monta la app completa con las rutas reales.
   Consultar por rol y nombre accesible (`getByRole`, `getByLabelText`).
-  `src/test/server.ts` trae respuestas por defecto (saldo, `mine` vacía, tipos, preview). Para
-  el detalle usar `mockDetail(...)`: un `http.get(".../:id")` suelto también atrapa `/mine` y
-  `/preview` y esconde errores. Para estados de carga, `deferred()` (`src/test/deferred.ts`)
+  `src/test/server.ts` trae respuestas por defecto (saldo, `mine` y `pending-approvals`
+  vacías, tipos, preview). Para el detalle usar `mockDetail(...)`: un `http.get(".../:id")`
+  suelto también atrapa `/mine` y `/preview` y esconde errores. Para estados de carga, `deferred()` (`src/test/deferred.ts`)
   detiene una respuesta hasta que el test la suelta; para debounces, timers falsos solo de
   `setTimeout`/`clearTimeout`. Fixtures en `src/test/fixtures.ts`.
 
 ## Forma de trabajar
+- Nunca trabajar directo en `main`: cada cambio va en una rama (`feat/…`, `fix/…`, `docs/…`)
+  y se integra con un Pull Request. No hacer push sin que lo pida.
+- Todas las respuestas, planes y revisiones (incluidas las de los agentes) van en español.
 - Estoy aprendiendo: explica brevemente qué hiciste y por qué.
 - Trabaja en pasos pequeños y verificables.
 - Pregunta antes de instalar dependencias nuevas o cambiar la estructura del proyecto.
@@ -227,9 +260,6 @@ Frontend (desde `client/`):
   `{ code: "INSUFFICIENT_BALANCE", requested, available, period }`), tanto en el error del POST
   como en `problems` del preview, y que el cliente arme el texto con `formatDate`. Mantener
   `error`/`message` en español para otros clientes.
-- Fase 4C: ajustar los textos del detalle (`RequestDetailPage`) para MANAGER y HR, que hoy
-  asumen que quien mira es el solicitante ("Descuenta de tus vacaciones", "Volver a Mis
-  solicitudes"); el regreso debe ir a Aprobaciones cuando se llegue desde ahí.
 - `BalanceAdjustment.leaveTypeId` existe pero `getVacationBalance` suma todos los ajustes sin
   filtrar por tipo: definir antes del CRUD de ajustes si un ajuste ligado a un tipo que no
   descuenta vacaciones debe afectar el saldo.
@@ -264,8 +294,17 @@ Frontend (desde `client/`):
     el rol del jefe directo).
   - Mostrar a HR las PENDING que nadie puede decidir (p. ej. el único HR activo sin
     jefe activo).
-- En el detalle, avisar cuando el saldo del periodo está negativo: hoy
-  `permissions.canApprove` sale `true` aunque aprobar vaya a responder 422.
+- Contador de "Aprobaciones" del menú: hoy solo se refresca al invalidar, al montar o al volver
+  el foco a la ventana. Cuando exista el rate limiting por usuario, agregarle `refetchInterval`
+  (1–2 min, `refetchIntervalInBackground: false`) para que un jefe con la pestaña abierta vea
+  llegar solicitudes nuevas.
+- Fase de RH: revisar el "Volver" del detalle (`useBackLink` en `RequestDetailPage`). Hoy toda
+  solicitud ajena regresa a Aprobaciones; cuando HR llegue desde otras pantallas (empleados,
+  reportes) debe regresar a la de origen (otro valor literal de router state, como
+  `FROM_APPROVALS_STATE`).
+- `availableWithoutRequest` supone que la propia solicitud cae en el periodo calculado; dejaría
+  de ser cierto si RH pudiera mover `hireDate` después de su `startDate`. Revisarlo en el CRUD
+  de empleados.
 - LFT pendiente de aplicar: Art. 78 (al menos 12 días continuos si el trabajador lo
   pide) y Art. 81 (las vacaciones se otorgan dentro de los 6 meses siguientes al
   aniversario).
