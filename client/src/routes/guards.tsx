@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
 import type { Role } from "@/api/types";
-import { useSession } from "@/auth/session";
+import { useQueryClient } from "@tanstack/react-query";
+import { endedByDeliberateLogout, useSession } from "@/auth/session";
 import { CurrentUserContext, useCurrentUser } from "@/auth/current-user";
 import { FullPageError, FullPageLoading } from "@/components/FullPageStatus";
 import { ROUTES } from "@/app/navigation";
@@ -12,6 +13,7 @@ import { redirectTarget, type LoginLocationState } from "./redirect-target";
 export function ProtectedRoute() {
   const session = useSession();
   const location = useLocation();
+  const queryClient = useQueryClient();
 
   if (session.isPending) {
     return <FullPageLoading label="Cargando sesión…" />;
@@ -31,7 +33,11 @@ export function ProtectedRoute() {
   }
 
   if (!session.data) {
-    const state: LoginLocationState = { from: location.pathname + location.search };
+    // Remember the page only when the session expired or was never there;
+    // after a deliberate logout, the next login starts at home.
+    const state: LoginLocationState | undefined = endedByDeliberateLogout(queryClient)
+      ? undefined
+      : { from: location.pathname + location.search };
     return <Navigate to={ROUTES.login} replace state={state} />;
   }
 
