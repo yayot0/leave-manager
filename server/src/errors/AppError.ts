@@ -1,5 +1,10 @@
 export class AppError extends Error {
   readonly statusCode: number;
+  /**
+   * Optional machine-readable reason (e.g. "OVERLAP"), sent as `code` in the
+   * error body so clients can react without parsing the message.
+   */
+  code?: string;
 
   constructor(statusCode: number, message: string) {
     super(message);
