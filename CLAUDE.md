@@ -72,6 +72,27 @@ Frontend (desde `client/`):
   en ese orden para evitar deadlocks (`server/src/db/locks.ts`); además el UPDATE va
   condicionado al estado leído.
 
+## Crear solicitud y vista previa
+- `POST /api/leave-requests` y `GET /api/leave-requests/preview?leaveTypeId=&startDate=&endDate=`
+  usan la MISMA validación (`server/src/modules/leave-requests/new-request-validation.ts`),
+  para que nunca se contradigan. Dos fases:
+  1. `evaluateRequestInput`: fecha pasada, fuera del periodo actual/siguiente, tipo inválido
+     o inactivo, 0 días hábiles. El POST la corre antes de la transacción.
+  2. `evaluateAgainstUserState`: encimadas y saldo del periodo del `startDate`. El POST la
+     corre dentro de la transacción, después de `lockUser`.
+- Cada problema tiene un `code` (`START_IN_PAST`, `START_TOO_FAR`, `INVALID_LEAVE_TYPE`,
+  `NO_BUSINESS_DAYS` → 400; `OVERLAP` → 409; `INSUFFICIENT_BALANCE` → 422). El POST lanza el
+  primero y su error trae `{ error, code }`; el preview responde 200 con todos en
+  `problems` y `canSubmit`. Los datos mal formados son 400 de Zod en ambos (el query del
+  preview es `.strict()`: solo esos tres parámetros).
+- El preview no escribe ni bloquea: es una foto; el POST revalida todo bajo el lock. Con un
+  problema de fecha no calcula saldo (`balance: null`, sería de otro periodo) pero sí revisa
+  encimadas; con tipo inválido se salta la fase 2. En ambos casos el POST ya habría fallado
+  en la fase 1, así que `canSubmit` sigue coincidiendo.
+- Toda regla nueva para crear solicitudes va en ese módulo, nunca solo en el POST.
+- `GET /api/leave-requests/mine` (y el POST) incluyen `permissions.canCancel`, calculado con
+  `transition()`; el cliente no reimplementa la máquina de estados.
+
 ## Saldo de vacaciones (periodo y fechas)
 - El saldo es por periodo de aniversario a aniversario (no año calendario).
 - Una solicitud cuenta en el periodo donde cae su `startDate`; un ajuste cuenta
@@ -133,12 +154,43 @@ Frontend (desde `client/`):
   y un id manipulado podría apuntar a otro endpoint del mismo origen.
 - Cada página usa `PageHeading` (su `h1` con `tabIndex={-1}` y el `<title>`); al
   cambiar de ruta `AppLayout` mueve el foco a ese `h1`.
+- Fechas (`src/lib/dates.ts`): las fechas sin hora ("YYYY-MM-DD", o `hireDate` con
+  `T00:00:00.000Z`) se formatean con `formatDate`/`formatShortDate`/`formatDateRange`, que las
+  reconstruyen en medianoche UTC y formatean con `timeZone: "UTC"`. Nunca
+  `new Date("2026-03-01")` + formato local: en Monterrey (UTC-6) sale el 28 de febrero. Los
+  instantes (`createdAt` de eventos) sí van en la zona del navegador (`formatDateTime`). En los
+  formularios las fechas se quedan como strings del `input type="date"`. Los tests corren con
+  `TZ=America/Monterrey` (`vite.config.ts`), así que detectan el error.
+- Números (`src/lib/numbers.ts`): negativos con el signo menos real "−", no con guion.
+- Ninguna regla de negocio en el cliente: días hábiles, saldos y si algo se puede cancelar
+  vienen de la API (preview, `permissions`). Para saber qué falló, usar `ApiError.code`, nunca
+  interpretar el texto del mensaje.
+- Query keys en `src/api/query-keys.ts`; todo lo de solicitudes bajo `["leave-requests"]`.
+  Tras crear o cancelar, `invalidateLeaveData` (`src/hooks/leave-requests.ts`) refresca lista,
+  detalles, aprobaciones y saldo sin esperar (no bloquea la navegación), y solo marca como
+  viejas las previews (`refetchType: "none"`): recalcular la del formulario recién enviado
+  mostraría "se encima" con la solicitud que se acaba de crear.
+- Rutas que no van en el menú (p. ej. `/solicitudes/:id`) van en `NAV_ITEMS` con
+  `showInMenu: false`; `canAccess` las empata con `matchPath` (un segmento por parámetro,
+  primero las estáticas) y sigue negando por defecto. Rutas con id: `requestDetailPath(id)`.
+- `CancelRequestDialog` sigue montado mientras está abierto o cerrándose aunque `canCancel`
+  pase a `false`, para que el error siga visible y el foco vaya al `h1` en vez de a `<body>`.
+  El mismo patrón aplica a futuros diálogos de aprobar/rechazar.
+- Logout a propósito: `useLogout` marca la salida como deliberada y `ProtectedRoute` redirige
+  a login sin `from`. No depende del orden entre la navegación de React Router (que es una
+  transition) y la actualización de TanStack Query, que no está garantizado.
+- Títulos de sección: `CardTitle` es un `div`; envolver el texto en `<h2>`.
 - Textos de la interfaz en español; código en inglés.
 - `src/components/ui/` es código generado por shadcn: se puede editar, pero con
   cuidado y solo para adaptarlo (p. ej. traducir textos).
 - Tests: con MSW (`src/test/server.ts`), nunca reemplazando `fetch` a mano;
   `renderApp(ruta)` (`src/test/render.tsx`) monta la app completa con las rutas reales.
   Consultar por rol y nombre accesible (`getByRole`, `getByLabelText`).
+  `src/test/server.ts` trae respuestas por defecto (saldo, `mine` vacía, tipos, preview). Para
+  el detalle usar `mockDetail(...)`: un `http.get(".../:id")` suelto también atrapa `/mine` y
+  `/preview` y esconde errores. Para estados de carga, `deferred()` (`src/test/deferred.ts`)
+  detiene una respuesta hasta que el test la suelta; para debounces, timers falsos solo de
+  `setTimeout`/`clearTimeout`. Fixtures en `src/test/fixtures.ts`.
 
 ## Forma de trabajar
 - Estoy aprendiendo: explica brevemente qué hiciste y por qué.
@@ -163,6 +215,24 @@ Frontend (desde `client/`):
     llegar a Node y responder 404 JSON, no HTML con 200.
   - Correr Node con `NODE_ENV=production`; si falta, la cookie sale sin `secure` aunque
     haya HTTPS.
+- **Obligatorio antes del despliegue (Fase 6): rate limiting por usuario** en las rutas con
+  sesión, empezando por `GET /api/leave-requests/preview` (cada llamada hace ~5 consultas y el
+  debounce del cliente no protege contra un script). Usar `express-rate-limit` con
+  `keyGenerator` por `req.user.id` (no por IP, así no depende de `trust proxy`), p. ej. ~60
+  peticiones/minuto. Hoy solo el login tiene límite.
+- Errores con datos estructurados: los mensajes de reglas de negocio traen fechas ISO
+  ("…(2026-12-02 a 2026-12-02)", "periodo 2026-03-15 a 2027-03-14") que la UI muestra tal cual,
+  mientras el resto usa "2 dic 2026". Solución: que el server devuelva el `code` (ya existe)
+  más los datos en campos aparte (p. ej. `{ code: "OVERLAP", overlap: { startDate, endDate } }`,
+  `{ code: "INSUFFICIENT_BALANCE", requested, available, period }`), tanto en el error del POST
+  como en `problems` del preview, y que el cliente arme el texto con `formatDate`. Mantener
+  `error`/`message` en español para otros clientes.
+- Fase 4C: ajustar los textos del detalle (`RequestDetailPage`) para MANAGER y HR, que hoy
+  asumen que quien mira es el solicitante ("Descuenta de tus vacaciones", "Volver a Mis
+  solicitudes"); el regreso debe ir a Aprobaciones cuando se llegue desde ahí.
+- `BalanceAdjustment.leaveTypeId` existe pero `getVacationBalance` suma todos los ajustes sin
+  filtrar por tipo: definir antes del CRUD de ajustes si un ajuste ligado a un tipo que no
+  descuenta vacaciones debe afectar el saldo.
 - Configurar `app.set("trust proxy", ...)` antes de desplegar detrás de un proxy o
   load balancer, para que `express-rate-limit` identifique la IP real del cliente.
 - Migrar `DATABASE_URL` (hoy leído directo de `process.env` en `server/src/db/prisma.ts`)
@@ -172,6 +242,8 @@ Frontend (desde `client/`):
   `countsAgainstVacationBalance`), o impedir editar ese campo en tipos que ya tienen
   solicitudes; hoy el saldo lo lee del tipo en el momento del cálculo, así que
   cambiarlo altera saldos hacia atrás. Decidirlo antes del CRUD de tipos para HR.
+  Relacionado: la fase 1 de la creación lee el tipo y los festivos fuera del lock, así que un
+  cambio de RH en ese instante no se ve (ventana de milisegundos).
 - Usar el mismo bloqueo por usuario (`lockUser` de `server/src/db/locks.ts`, dentro de
   la transacción) en los ajustes de saldo de HR y en cualquier futura modificación de
   solicitudes; el bloqueo solo serializa a quienes lo toman. (Crear, aprobar, rechazar
