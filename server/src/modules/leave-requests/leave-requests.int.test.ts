@@ -573,6 +573,63 @@ describe("POST /api/leave-requests - overlaps", () => {
   });
 });
 
+describe("POST /api/leave-requests - business-rule errors carry a machine-readable code", () => {
+  it.each([
+    ["START_IN_PAST", 400, "2026-11-10", "2026-11-12", "La fecha de inicio no puede ser anterior a hoy"],
+    [
+      "START_TOO_FAR", 400, "2028-02-01", "2028-02-01",
+      "La fecha de inicio debe caer en tu periodo actual o en el siguiente (a más tardar 2028-01-31)",
+    ],
+    [
+      "NO_BUSINESS_DAYS", 400, "2026-11-14", "2026-11-15",
+      "El rango no incluye días hábiles (solo fines de semana o festivos)",
+    ],
+    [
+      "INSUFFICIENT_BALANCE", 422, "2026-11-16", "2026-12-08",
+      "Saldo insuficiente: solicitas 17 días hábiles y tienes 16 disponibles en el periodo 2026-02-01 a 2027-01-31",
+    ],
+  ] as const)("%s => %i with { error, code }", async (code, status, startDate, endDate, message) => {
+    const { vacation, cookie } = await setup();
+    const res = await post(cookie, { leaveTypeId: vacation.id, startDate, endDate });
+    expect(res.status).toBe(status);
+    expect(res.body).toEqual({ error: message, code });
+  });
+
+  it("INVALID_LEAVE_TYPE => 400 with { error, code }", async () => {
+    const { cookie } = await setup();
+    const res = await post(cookie, { leaveTypeId: "does-not-exist", startDate: "2026-11-16", endDate: "2026-11-16" });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Tipo de permiso no válido o inactivo", code: "INVALID_LEAVE_TYPE" });
+  });
+
+  it("OVERLAP => 409 with { error, code }", async () => {
+    const { user, vacation, cookie } = await setup();
+    await createLeaveRequestRow({
+      requesterId: user.id, leaveTypeId: vacation.id, start: "2026-11-16", end: "2026-11-20", businessDays: 5,
+    });
+    const res = await post(cookie, { leaveTypeId: vacation.id, startDate: "2026-11-18", endDate: "2026-11-24" });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({
+      error: "Ya tienes una solicitud pendiente o aprobada que se encima con esas fechas (2026-11-16 a 2026-11-20)",
+      code: "OVERLAP",
+    });
+  });
+
+  it("Zod validation errors keep { error, details } without code", async () => {
+    const { vacation, cookie } = await setup();
+    const res = await post(cookie, { leaveTypeId: vacation.id, startDate: "2026-11-20", endDate: "2026-11-19" });
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: "Datos de entrada inválidos", details: expect.any(Array) });
+    expect(res.body).not.toHaveProperty("code");
+  });
+
+  it("401 keeps { error } without code", async () => {
+    const res = await post(null, { leaveTypeId: "x", startDate: "2026-11-16", endDate: "2026-11-16" });
+    expect(res.status).toBe(401);
+    expect(res.body).not.toHaveProperty("code");
+  });
+});
+
 describe("authentication", () => {
   it("POST without cookie => 401", async () => {
     const res = await post(null, { leaveTypeId: "x", startDate: "2026-11-16", endDate: "2026-11-16" });
@@ -671,6 +728,100 @@ describe("GET /api/leave-requests/mine", () => {
   });
 });
 
+describe("permissions.canCancel (state machine, today in APP_TIMEZONE)", () => {
+  type Status = "PENDING" | "APPROVED" | "REJECTED" | "CANCELLED";
+
+  async function canCancelOf(status: Status, start: string, end = start) {
+    const { user, vacation, cookie } = await setup();
+    await createLeaveRequestRow({
+      requesterId: user.id, leaveTypeId: vacation.id, start, end, businessDays: 1, status,
+    });
+    const res = await request(app).get("/api/leave-requests/mine").set("Cookie", cookie);
+    expect(res.status).toBe(200);
+    expect(res.body.leaveRequests).toHaveLength(1);
+    return res.body.leaveRequests[0].permissions.canCancel as boolean;
+  }
+
+  it.each<[string, Status, string, boolean]>([
+    ["PENDING in the future => true", "PENDING", "2026-11-16", true],
+    ["PENDING starting today => true", "PENDING", "2026-11-11", true],
+    ["PENDING already started (overdue) => true", "PENDING", "2026-11-09", true],
+    ["APPROVED starting tomorrow => true", "APPROVED", "2026-11-12", true],
+    ["APPROVED starting today => false", "APPROVED", "2026-11-11", false],
+    ["APPROVED in the past => false", "APPROVED", "2026-11-02", false],
+    ["APPROVED far in the future => true", "APPROVED", "2027-03-01", true],
+    ["REJECTED in the future => false", "REJECTED", "2026-11-16", false],
+    ["CANCELLED in the future => false", "CANCELLED", "2026-11-16", false],
+  ])("%s", async (_label, status, start, expected) => {
+    expect(await canCancelOf(status, start)).toBe(expected);
+  });
+
+  it("APPROVED that started yesterday and is still running => false", async () => {
+    expect(await canCancelOf("APPROVED", "2026-11-10", "2026-11-13")).toBe(false);
+  });
+
+  it("uses the company timezone: at 03:00 UTC on Nov 12 it is still Nov 11 in Monterrey, so APPROVED starting Nov 12 can be cancelled", async () => {
+    vi.setSystemTime(new Date("2026-11-12T03:00:00Z"));
+    expect(await canCancelOf("APPROVED", "2026-11-12")).toBe(true);
+  });
+
+  it("uses the company timezone: at 06:00 UTC on Nov 12 (midnight in Monterrey) APPROVED starting Nov 12 can no longer be cancelled", async () => {
+    vi.setSystemTime(new Date("2026-11-12T06:00:00Z"));
+    expect(await canCancelOf("APPROVED", "2026-11-12")).toBe(false);
+  });
+
+  it("each request in /mine carries its own permissions", async () => {
+    const { user, vacation, cookie } = await setup();
+    await createLeaveRequestRow({
+      requesterId: user.id, leaveTypeId: vacation.id, start: "2026-12-07", end: "2026-12-07", businessDays: 1, status: "PENDING",
+    });
+    await createLeaveRequestRow({
+      requesterId: user.id, leaveTypeId: vacation.id, start: "2026-11-11", end: "2026-11-11", businessDays: 1, status: "APPROVED",
+    });
+    await createLeaveRequestRow({
+      requesterId: user.id, leaveTypeId: vacation.id, start: "2026-06-01", end: "2026-06-01", businessDays: 1, status: "REJECTED",
+    });
+    const res = await request(app).get("/api/leave-requests/mine").set("Cookie", cookie);
+    expect(
+      res.body.leaveRequests.map((r: { status: string; permissions: { canCancel: boolean } }) => [r.status, r.permissions]),
+    ).toEqual([
+      ["PENDING", { canCancel: true }],
+      ["APPROVED", { canCancel: false }],
+      ["REJECTED", { canCancel: false }],
+    ]);
+  });
+
+  it("POST returns the new PENDING request with permissions.canCancel true (also when it starts today)", async () => {
+    const { vacation, cookie } = await setup();
+    const res = await post(cookie, { leaveTypeId: vacation.id, startDate: "2026-11-11", endDate: "2026-11-11" });
+    expect(res.status).toBe(201);
+    expect(res.body.leaveRequest.permissions).toEqual({ canCancel: true });
+  });
+
+  it("canCancel in /mine changes once the request is approved via the API and its start date arrives", async () => {
+    const manager = await createUser({ role: "MANAGER" });
+    const user = await createUser({ hireDate: "2023-02-01", managerId: manager.id });
+    const vacation = await createLeaveType({ code: "VAC" });
+    const cookie = await authCookie(user.id);
+
+    const created = await post(cookie, { leaveTypeId: vacation.id, startDate: "2026-11-12", endDate: "2026-11-12" });
+    expect(created.status).toBe(201);
+    const approved = await request(app)
+      .post(`/api/leave-requests/${created.body.leaveRequest.id}/approve`)
+      .set("Cookie", await authCookie(manager.id));
+    expect(approved.status).toBe(200);
+
+    const before = await request(app).get("/api/leave-requests/mine").set("Cookie", cookie);
+    expect(before.body.leaveRequests[0]).toMatchObject({ status: "APPROVED", permissions: { canCancel: true } });
+
+    // A day later the 8h session has expired: sign a fresh cookie.
+    vi.setSystemTime(new Date("2026-11-12T18:00:00Z"));
+    const after = await request(app).get("/api/leave-requests/mine").set("Cookie", await authCookie(user.id));
+    expect(after.status).toBe(200);
+    expect(after.body.leaveRequests[0]).toMatchObject({ status: "APPROVED", permissions: { canCancel: false } });
+  });
+});
+
 describe("concurrency", () => {
   it("two simultaneous 10-day requests (non-overlapping) with a 16-day balance => exactly one 201 and one 422", async () => {
     for (let i = 0; i < 5; i++) {
@@ -698,6 +849,12 @@ describe("concurrency", () => {
       const [a, b] = await Promise.all([post(cookie, body), post(cookie, body)]);
 
       expect([a.status, b.status].sort(), `iteration ${i}`).toEqual([201, 409]);
+      const conflict = a.status === 409 ? a : b;
+      // Whether the app-level check or the EXCLUDE constraint caught it, the body carries code OVERLAP.
+      expect(conflict.body, `iteration ${i}`).toEqual({
+        error: expect.stringMatching(/se encima con esas fechas/),
+        code: "OVERLAP",
+      });
       expect(await countRows(), `iteration ${i}`).toEqual({ requests: 1, events: 1 });
     }
   });

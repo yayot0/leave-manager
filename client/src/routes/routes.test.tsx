@@ -3,7 +3,7 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw/http";
 import { renderApp } from "@/test/render";
 import { mockSession, server } from "@/test/server";
-import { buildUser } from "@/test/fixtures";
+import { buildUser, VALID_PASSWORD } from "@/test/fixtures";
 import { sessionQueryKey } from "@/auth/session";
 
 function menuLinks(): string[] {
@@ -149,12 +149,28 @@ describe("protected routes", () => {
   it("returns to login when any API call answers 401 mid-session", async () => {
     mockSession(buildUser("EMPLOYEE"));
     server.use(http.get("/api/leave-requests/mine", () => HttpResponse.json({ error: "No autenticado" }, { status: 401 })));
+    // The page's own request gets the 401.
     const { router } = renderApp("/solicitudes");
-    await screen.findByRole("heading", { level: 1, name: "Mis solicitudes" });
 
-    // No page calls this endpoint yet: call the client directly, as a page would.
-    const { apiFetch } = await import("@/api/client");
-    await expect(apiFetch("/leave-requests/mine")).rejects.toMatchObject({ status: 401 });
+    await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
+    expect(router.state.location.state).toEqual({ from: "/solicitudes" });
+  });
+
+  it("forgets the deliberate logout on the next login, so a later expiry remembers the page", async () => {
+    mockSession(buildUser("EMPLOYEE"));
+    const { user, router } = renderApp("/saldo");
+    await user.click(await screen.findByRole("button", { name: "Cerrar sesión" }));
+    await screen.findByRole("heading", { level: 1, name: "Iniciar sesión" });
+
+    // Log in again (the default login handler answers with an EMPLOYEE).
+    await user.type(screen.getByLabelText("Correo electrónico"), "employee@empresa.com");
+    await user.type(screen.getByLabelText("Contraseña"), VALID_PASSWORD);
+    await user.click(screen.getByRole("button", { name: "Iniciar sesión" }));
+    await screen.findByRole("heading", { level: 1, name: "Mi saldo" });
+
+    // Now the session expires while on another page.
+    server.use(http.get("/api/leave-requests/mine", () => HttpResponse.json({ error: "No autenticado" }, { status: 401 })));
+    await user.click(within(screen.getByRole("navigation", { name: "Principal" })).getByRole("link", { name: "Mis solicitudes" }));
 
     await waitFor(() => expect(router.state.location.pathname).toBe("/login"));
     expect(router.state.location.state).toEqual({ from: "/solicitudes" });

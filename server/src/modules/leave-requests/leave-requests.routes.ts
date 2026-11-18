@@ -6,9 +6,14 @@ import {
   createLeaveRequestSchema,
   leaveRequestIdSchema,
   optionalNoteSchema,
+  previewLeaveRequestSchema,
   requiredNoteSchema,
 } from "./leave-requests.schemas.js";
-import { createLeaveRequest, listMyLeaveRequests } from "./leave-requests.service.js";
+import {
+  createLeaveRequest,
+  listMyLeaveRequests,
+  previewLeaveRequest,
+} from "./leave-requests.service.js";
 import {
   applyLeaveRequestAction,
   getLeaveRequestDetail,
@@ -34,6 +39,15 @@ leaveRequestsRouter.post("/", async (req, res) => {
 leaveRequestsRouter.get("/mine", async (req, res) => {
   const leaveRequests = await listMyLeaveRequests(authUser(req).id);
   res.json({ leaveRequests });
+});
+
+// What POST / would do with the same data, without saving anything. Business
+// problems (overlap, insufficient balance…) come back as 200 with `problems`;
+// malformed input is a 400, like in the POST.
+leaveRequestsRouter.get("/preview", async (req, res) => {
+  const input = previewLeaveRequestSchema.parse(req.query);
+  const preview = await previewLeaveRequest(authUser(req), input);
+  res.json({ preview });
 });
 
 leaveRequestsRouter.get("/pending-approvals", async (req, res) => {

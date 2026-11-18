@@ -3,17 +3,18 @@ import type { Prisma } from "../../generated/prisma/client.js";
 import { isOverlapConstraintViolation } from "../../db/pg-errors.js";
 import { lockUser } from "../../db/locks.js";
 import { env } from "../../config/env.js";
-import { countBusinessDays, getLatestRequestableStartDate } from "../../domain/vacation.js";
 import { todayInTimeZone, toISODate } from "../../domain/dates.js";
+import { transition } from "../../domain/leave-request-state.js";
+import type { CreateLeaveRequestInput, PreviewLeaveRequestInput } from "./leave-requests.schemas.js";
 import {
-  BadRequestError,
-  ConflictError,
-  UnprocessableEntityError,
-} from "../../errors/AppError.js";
-import { getVacationBalance } from "../balance/balance.service.js";
-import type { CreateLeaveRequestInput } from "./leave-requests.schemas.js";
-
-const OVERLAP_MESSAGE = "Ya tienes una solicitud pendiente o aprobada que se encima con esas fechas";
+  evaluateAgainstUserState,
+  evaluateRequestInput,
+  hasDateProblem,
+  OVERLAP_MESSAGE,
+  problemToError,
+  type EvaluatedLeaveType,
+  type LeaveRequestProblem,
+} from "./new-request-validation.js";
 
 const leaveRequestSelect = {
   id: true,
@@ -33,11 +34,19 @@ const leaveRequestSelect = {
 // Derived from the select itself, so it can never drift from what we query.
 type LeaveRequestRow = Prisma.LeaveRequestGetPayload<{ select: typeof leaveRequestSelect }>;
 
-export function serializeLeaveRequest(row: LeaveRequestRow) {
+/**
+ * `permissions.canCancel` comes from the same state machine the cancel
+ * endpoint uses, so the client never re-implements it. `today` is the
+ * calendar date in APP_TIMEZONE.
+ */
+export function serializeLeaveRequest(row: LeaveRequestRow, today: Date) {
   return {
     ...row,
     startDate: toISODate(row.startDate),
     endDate: toISODate(row.endDate),
+    permissions: {
+      canCancel: transition(row.status, "CANCEL", { startDate: row.startDate, today }).ok,
+    },
   };
 }
 
@@ -45,40 +54,15 @@ export async function createLeaveRequest(
   user: { id: string; hireDate: Date },
   input: CreateLeaveRequestInput,
 ) {
-  const { startDate, endDate, leaveTypeId, reason } = input;
+  const { startDate, endDate, reason } = input;
 
+  // Phase 1 (input, calendar, leave type) needs no lock.
   const today = todayInTimeZone(env.APP_TIMEZONE);
-  if (startDate.getTime() < today.getTime()) {
-    throw new BadRequestError("La fecha de inicio no puede ser anterior a hoy");
+  const evaluated = await evaluateRequestInput(prisma, user, input, today);
+  if (!evaluated.ok) {
+    throw problemToError(evaluated.problems[0]);
   }
-
-  const latestStart = getLatestRequestableStartDate(user.hireDate, today);
-  if (startDate.getTime() > latestStart.getTime()) {
-    throw new BadRequestError(
-      "La fecha de inicio debe caer en tu periodo actual o en el siguiente " +
-        `(a más tardar ${toISODate(latestStart)})`,
-    );
-  }
-
-  const leaveType = await prisma.leaveType.findUnique({ where: { id: leaveTypeId } });
-  if (!leaveType || !leaveType.isActive) {
-    throw new BadRequestError("Tipo de permiso no válido o inactivo");
-  }
-
-  const holidays = await prisma.holiday.findMany({
-    where: { date: { gte: startDate, lte: endDate } },
-    select: { date: true },
-  });
-  const businessDays = countBusinessDays(
-    startDate,
-    endDate,
-    holidays.map((h) => h.date),
-  );
-  if (businessDays === 0) {
-    throw new BadRequestError(
-      "El rango no incluye días hábiles (solo fines de semana o festivos)",
-    );
-  }
+  const { leaveType, businessDays } = evaluated;
 
   try {
     return await prisma.$transaction(async (tx) => {
@@ -87,32 +71,16 @@ export async function createLeaveRequest(
       // sees the request created by it when computing its own balance.
       await lockUser(tx, user.id);
 
-      const overlapping = await tx.leaveRequest.findFirst({
-        where: {
-          requesterId: user.id,
-          status: { in: ["PENDING", "APPROVED"] },
-          startDate: { lte: endDate },
-          endDate: { gte: startDate },
-        },
-        select: { startDate: true, endDate: true, status: true },
+      // Phase 2 (overlaps, balance) runs under the lock.
+      const state = await evaluateAgainstUserState(tx, user, {
+        startDate,
+        endDate,
+        leaveType,
+        businessDays,
       });
-      if (overlapping) {
-        throw new ConflictError(
-          `${OVERLAP_MESSAGE} (${toISODate(overlapping.startDate)} a ${toISODate(overlapping.endDate)})`,
-        );
-      }
-
-      if (leaveType.countsAgainstVacationBalance) {
-        // The request counts in the anniversary period where startDate falls,
-        // so that is the period whose balance must cover it.
-        const balance = await getVacationBalance(tx, user, startDate);
-        if (businessDays > balance.available) {
-          throw new UnprocessableEntityError(
-            `Saldo insuficiente: solicitas ${businessDays} días hábiles y tienes ` +
-              `${Math.max(balance.available, 0)} disponibles en el periodo ` +
-              `${toISODate(balance.period.start)} a ${toISODate(balance.period.end)}`,
-          );
-        }
+      const [firstProblem] = state.problems;
+      if (firstProblem) {
+        throw problemToError(firstProblem);
       }
 
       const created = await tx.leaveRequest.create({
@@ -128,16 +96,77 @@ export async function createLeaveRequest(
         },
         select: leaveRequestSelect,
       });
-      return serializeLeaveRequest(created);
+      return serializeLeaveRequest(created, today);
     });
   } catch (err) {
     // Safety net: if a concurrent insert slipped past the app-level check,
     // the EXCLUDE constraint rejects it; report it as the same 409.
     if (isOverlapConstraintViolation(err)) {
-      throw new ConflictError(OVERLAP_MESSAGE);
+      throw problemToError({ code: "OVERLAP", message: OVERLAP_MESSAGE });
     }
     throw err;
   }
+}
+
+export interface LeaveRequestPreview {
+  businessDays: number;
+  leaveType: EvaluatedLeaveType | null;
+  /** Dates as "YYYY-MM-DD". null if the type does not count, or the start date is invalid. */
+  balance: { period: { start: string; end: string }; available: number; availableAfter: number } | null;
+  problems: LeaveRequestProblem[];
+  canSubmit: boolean;
+}
+
+/**
+ * GET /api/leave-requests/preview — what POST would do with the same input,
+ * without writing anything or taking locks. Runs the same two validation
+ * phases as createLeaveRequest, but collects problems instead of throwing
+ * the first one. Phase 2 is skipped when the leave type is invalid (there is
+ * no type to check against), and the balance when the start date is invalid
+ * (it would be another period's). The POST would have stopped at phase 1 in
+ * both cases, so `canSubmit` still matches it exactly. Being lock-free, it is
+ * a snapshot: the POST re-checks everything under the lock.
+ */
+export async function previewLeaveRequest(
+  user: { id: string; hireDate: Date },
+  input: PreviewLeaveRequestInput,
+): Promise<LeaveRequestPreview> {
+  const today = todayInTimeZone(env.APP_TIMEZONE);
+  const evaluated = await evaluateRequestInput(prisma, user, input, today);
+  const problems: LeaveRequestProblem[] = [...evaluated.problems];
+
+  let balance: LeaveRequestPreview["balance"] = null;
+  if (evaluated.leaveType) {
+    const state = await evaluateAgainstUserState(
+      prisma,
+      user,
+      {
+        startDate: input.startDate,
+        endDate: input.endDate,
+        leaveType: evaluated.leaveType,
+        businessDays: evaluated.businessDays,
+      },
+      { checkBalance: !hasDateProblem(evaluated.problems) },
+    );
+    problems.push(...state.problems);
+    if (state.balance) {
+      balance = {
+        ...state.balance,
+        period: {
+          start: toISODate(state.balance.period.start),
+          end: toISODate(state.balance.period.end),
+        },
+      };
+    }
+  }
+
+  return {
+    businessDays: evaluated.businessDays,
+    leaveType: evaluated.leaveType,
+    balance,
+    problems,
+    canSubmit: problems.length === 0,
+  };
 }
 
 export async function listMyLeaveRequests(userId: string) {
@@ -146,5 +175,6 @@ export async function listMyLeaveRequests(userId: string) {
     orderBy: [{ startDate: "desc" }, { createdAt: "desc" }],
     select: leaveRequestSelect,
   });
-  return rows.map(serializeLeaveRequest);
+  const today = todayInTimeZone(env.APP_TIMEZONE);
+  return rows.map((row) => serializeLeaveRequest(row, today));
 }

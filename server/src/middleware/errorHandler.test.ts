@@ -76,6 +76,32 @@ describe("errorHandler: other errors", () => {
     expect(res.body).toEqual({ error: "Choque" });
   });
 
+  it("an AppError with a code responds { error, code }", async () => {
+    const err = new ConflictError("Choque");
+    err.code = "OVERLAP";
+    const res = await request(appThrowing(err)).get("/boom");
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual({ error: "Choque", code: "OVERLAP" });
+  });
+
+  it("an AppError without a code responds only { error } (no code key at all)", async () => {
+    const res = await request(appThrowing(new ConflictError("Choque"))).get("/boom");
+    expect(Object.keys(res.body)).toEqual(["error"]);
+  });
+
+  it("an AppError with an empty-string code responds only { error }", async () => {
+    const err = new ConflictError("Choque");
+    err.code = "";
+    const res = await request(appThrowing(err)).get("/boom");
+    expect(res.body).toEqual({ error: "Choque" });
+  });
+
+  it("a plain Error with a code property is still a 500 that does not leak the code", async () => {
+    const res = await request(appThrowing(Object.assign(new Error("x"), { code: "OVERLAP" }))).get("/boom");
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Error interno del servidor" });
+  });
+
   it("a ZodError is a 400 with details", async () => {
     const parsed = z.object({ a: z.string({ error: "a es obligatorio" }) }).safeParse({});
     const res = await request(appThrowing(parsed.error)).get("/boom");

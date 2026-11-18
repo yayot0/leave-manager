@@ -15,31 +15,47 @@ const isoDate = z
     return date;
   });
 
-export const createLeaveRequestSchema = z
-  .object({
-    leaveTypeId: z
-      .string()
-      .trim()
-      .min(1, "leaveTypeId es obligatorio")
-      .max(64, "leaveTypeId no es válido"),
-    startDate: isoDate,
-    endDate: isoDate,
-    reason: z
-      .string()
-      .trim()
-      .max(500, "El motivo no puede exceder 500 caracteres")
-      .optional()
-      .transform((value) => (value ? value : undefined)),
-  })
-  .strict()
-  .refine((data) => data.endDate.getTime() >= data.startDate.getTime(), {
-    message: "La fecha de fin no puede ser anterior a la fecha de inicio",
-    path: ["endDate"],
-  })
-  .refine((data) => diffInDays(data.startDate, data.endDate) < MAX_REQUEST_RANGE_DAYS, {
-    message: `El rango no puede exceder ${MAX_REQUEST_RANGE_DAYS} días`,
-    path: ["endDate"],
-  });
+const leaveTypeId = z
+  .string()
+  .trim()
+  .min(1, "leaveTypeId es obligatorio")
+  .max(64, "leaveTypeId no es válido");
+
+/** Range rules shared by create and preview, so both reject the same input. */
+function withRangeRules<T extends z.ZodType<{ startDate: Date; endDate: Date }>>(schema: T) {
+  return schema
+    .refine((data) => data.endDate.getTime() >= data.startDate.getTime(), {
+      message: "La fecha de fin no puede ser anterior a la fecha de inicio",
+      path: ["endDate"],
+    })
+    .refine((data) => diffInDays(data.startDate, data.endDate) < MAX_REQUEST_RANGE_DAYS, {
+      message: `El rango no puede exceder ${MAX_REQUEST_RANGE_DAYS} días`,
+      path: ["endDate"],
+    });
+}
+
+export const createLeaveRequestSchema = withRangeRules(
+  z
+    .object({
+      leaveTypeId,
+      startDate: isoDate,
+      endDate: isoDate,
+      reason: z
+        .string()
+        .trim()
+        .max(500, "El motivo no puede exceder 500 caracteres")
+        .optional()
+        .transform((value) => (value ? value : undefined)),
+    })
+    .strict(),
+);
+
+/** GET /preview query string: the same fields as create, minus `reason`. */
+export const previewLeaveRequestSchema = withRangeRules(
+  z.object({ leaveTypeId, startDate: isoDate, endDate: isoDate }).strict(),
+);
+
+export type PreviewLeaveRequestInput = z.infer<typeof previewLeaveRequestSchema>;
 
 export type CreateLeaveRequestInput = z.infer<typeof createLeaveRequestSchema>;
 

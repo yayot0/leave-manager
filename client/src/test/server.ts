@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw/http";
 import { setupServer } from "msw/node";
 import type { User } from "@/api/types";
-import { buildUser, VALID_PASSWORD } from "./fixtures";
+import { buildBalance, buildPreview, buildUser, PERSONAL_TYPE, VACATION_TYPE, VALID_PASSWORD } from "./fixtures";
 
 /**
  * MSW intercepts the real `fetch` calls at the network level, so tests run
@@ -10,6 +10,8 @@ import { buildUser, VALID_PASSWORD } from "./fixtures";
  *
  * Default state: nobody is logged in. A test logs a user in with
  * `mockSession(user)` or overrides any endpoint with `server.use(...)`.
+ * The data endpoints answer with a neutral default (a balance, no requests,
+ * two leave types, a clean preview) so pages render without extra setup.
  */
 export const handlers = [
   http.get("/api/auth/me", () => HttpResponse.json({ error: "No autenticado" }, { status: 401 })),
@@ -23,10 +25,36 @@ export const handlers = [
   }),
 
   http.post("/api/auth/logout", () => HttpResponse.json({ message: "Sesión cerrada" })),
+
+  http.get("/api/me/balance", () => HttpResponse.json({ balance: buildBalance() })),
+  http.get("/api/leave-types", () => HttpResponse.json({ leaveTypes: [VACATION_TYPE, PERSONAL_TYPE] })),
+  http.get("/api/leave-requests/mine", () => HttpResponse.json({ leaveRequests: [] })),
+  http.get("/api/leave-requests/preview", () => HttpResponse.json({ preview: buildPreview() })),
 ];
 
 export const server = setupServer(...handlers);
 
 export function mockSession(user: User): void {
   server.use(http.get("/api/auth/me", () => HttpResponse.json({ user })));
+}
+
+// Static paths that "/api/leave-requests/:id" would also match.
+const LEAVE_REQUEST_COLLECTIONS = new Set(["mine", "preview", "pending-approvals"]);
+
+/**
+ * Mocks GET /api/leave-requests/:id only. A bare `http.get(".../:id")` set
+ * with `server.use` would win over the default handlers and also answer
+ * /mine and /preview, hiding bugs; returning nothing here lets MSW fall
+ * through to the handler of those paths.
+ */
+export function mockDetail(resolve: (id: string, request: Request) => Response | Promise<Response>): void {
+  server.use(
+    http.get("/api/leave-requests/:id", ({ params, request }) => {
+      const id = String(params.id);
+      if (LEAVE_REQUEST_COLLECTIONS.has(id)) {
+        return undefined;
+      }
+      return resolve(id, request);
+    }),
+  );
 }
