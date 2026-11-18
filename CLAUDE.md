@@ -244,6 +244,13 @@ Frontend (desde `client/`):
   cambiarlo altera saldos hacia atrás. Decidirlo antes del CRUD de tipos para HR.
   Relacionado: la fase 1 de la creación lee el tipo y los festivos fuera del lock, así que un
   cambio de RH en ese instante no se ve (ventana de milisegundos).
+- Límite de días por solicitud en tipos que no descuentan saldo: hoy no tienen tope (p. ej.
+  se pudo pedir un "Día personal" de 22 días hábiles), porque el saldo es lo único que acota
+  una solicitud. Como parte del CRUD de tipos de permiso (fase de RH), agregar un máximo de
+  días hábiles por solicitud configurable por tipo (p. ej. `maxBusinessDaysPerRequest`,
+  opcional = sin límite) y validarlo en `new-request-validation.ts` con un `ProblemCode` propio
+  (p. ej. `EXCEEDS_TYPE_LIMIT`), para que el POST y la vista previa lo apliquen igual. La
+  migración se revisa con db-architect antes de correr tests.
 - Usar el mismo bloqueo por usuario (`lockUser` de `server/src/db/locks.ts`, dentro de
   la transacción) en los ajustes de saldo de HR y en cualquier futura modificación de
   solicitudes; el bloqueo solo serializa a quienes lo toman. (Crear, aprobar, rechazar
