@@ -139,7 +139,7 @@ async function main() {
   }
 
   // 3. Tipos de permiso.
-  const leaveTypesByCode = new Map<string, string>();
+  const leaveTypesByCode = new Map<string, { id: string; countsAgainstVacationBalance: boolean }>();
   for (const lt of LEAVE_TYPES) {
     const created = await prisma.leaveType.create({
       data: {
@@ -148,7 +148,10 @@ async function main() {
         countsAgainstVacationBalance: lt.countsAgainstVacationBalance,
       },
     });
-    leaveTypesByCode.set(lt.code, created.id);
+    leaveTypesByCode.set(lt.code, {
+      id: created.id,
+      countsAgainstVacationBalance: created.countsAgainstVacationBalance,
+    });
   }
 
   // 4. Festivos 2026-2027.
@@ -210,10 +213,13 @@ async function main() {
     lastUpdateAt: string;
   }) {
     const businessDays = countBusinessDays(d(opts.start), d(opts.end), HOLIDAY_DATES);
+    const leaveType = leaveTypesByCode.get(opts.leaveType)!;
     const request = await prisma.leaveRequest.create({
       data: {
         requesterId: userId(opts.requester),
-        leaveTypeId: leaveTypesByCode.get(opts.leaveType)!,
+        leaveTypeId: leaveType.id,
+        // Copy taken at creation, as the API does.
+        countsAgainstVacationBalance: leaveType.countsAgainstVacationBalance,
         startDate: d(opts.start),
         endDate: d(opts.end),
         businessDays,

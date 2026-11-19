@@ -40,6 +40,8 @@ const detailSelect = {
   decisionNote: true,
   createdAt: true,
   updatedAt: true,
+  // The request's own copy: what its balance uses, even if the type changed.
+  countsAgainstVacationBalance: true,
   leaveType: {
     select: { id: true, code: true, name: true, countsAgainstVacationBalance: true },
   },
@@ -65,8 +67,8 @@ const decisionSelect = {
   status: true,
   startDate: true,
   deciderId: true,
+  countsAgainstVacationBalance: true,
   requester: { select: requesterSelect },
-  leaveType: { select: { countsAgainstVacationBalance: true } },
 } satisfies Prisma.LeaveRequestSelect;
 
 /**
@@ -132,7 +134,7 @@ export async function getLeaveRequestDetail(actor: Actor, id: string) {
     throw new NotFoundError(NOT_FOUND_MESSAGE);
   }
   const requesterBalance =
-    isDecidable(row, actor) && row.leaveType.countsAgainstVacationBalance
+    isDecidable(row, actor) && row.countsAgainstVacationBalance
       ? await getDecisionBalance(row)
       : null;
   return serializeDetail(row, actor, todayInTimeZone(env.APP_TIMEZONE), requesterBalance);
@@ -164,6 +166,7 @@ export async function listPendingApprovals(actor: Actor) {
       businessDays: true,
       reason: true,
       createdAt: true,
+      countsAgainstVacationBalance: true,
       leaveType: { select: { id: true, code: true, name: true, countsAgainstVacationBalance: true } },
       requester: { select: personSelect },
     },
@@ -244,7 +247,8 @@ export async function applyLeaveRequestAction(
       throw new ConflictError(result.reason);
     }
 
-    if (action === "APPROVE" && request.leaveType.countsAgainstVacationBalance) {
+    // The request's own copy decides, not the type's current value.
+    if (action === "APPROVE" && request.countsAgainstVacationBalance) {
       // PENDING -> APPROVED does not change the total already reserved, so
       // the period stays valid as long as available >= 0. It can be negative
       // if HR applied a negative adjustment after the request was created.

@@ -26,6 +26,9 @@ const leaveRequestSelect = {
   decidedAt: true,
   decisionNote: true,
   createdAt: true,
+  // The request's own copy (what its balance uses), which may differ from
+  // leaveType.countsAgainstVacationBalance if HR edited the type later.
+  countsAgainstVacationBalance: true,
   leaveType: {
     select: { id: true, code: true, name: true, countsAgainstVacationBalance: true },
   },
@@ -87,6 +90,9 @@ export async function createLeaveRequest(
         data: {
           requesterId: user.id,
           leaveTypeId: leaveType.id,
+          // Copy taken from the same leave type phase 1 validated, so the
+          // balance check above and the stored copy always agree.
+          countsAgainstVacationBalance: leaveType.countsAgainstVacationBalance,
           startDate,
           endDate,
           businessDays,

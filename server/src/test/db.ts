@@ -96,8 +96,18 @@ export async function createLeaveRequestRow(opts: {
   /** Who decided it. Only allowed for APPROVED, REJECTED or CANCELLED. */
   deciderId?: string;
   decidedAt?: Date;
+  /** The request's copy; defaults to its leave type's current value, as the API does. */
+  countsAgainstVacationBalance?: boolean;
 }) {
   const status = opts.status ?? "PENDING";
+  const countsAgainstVacationBalance =
+    opts.countsAgainstVacationBalance ??
+    (
+      await prisma.leaveType.findUniqueOrThrow({
+        where: { id: opts.leaveTypeId },
+        select: { countsAgainstVacationBalance: true },
+      })
+    ).countsAgainstVacationBalance;
   // chk_leave_requests_decision_matches_status: APPROVED/REJECTED need a
   // decider (different from the requester); invent one if the test did not
   // pass it, so every row this helper creates is valid for the database.
@@ -108,6 +118,7 @@ export async function createLeaveRequestRow(opts: {
     data: {
       requesterId: opts.requesterId,
       leaveTypeId: opts.leaveTypeId,
+      countsAgainstVacationBalance,
       startDate: d(opts.start),
       endDate: d(opts.end),
       businessDays: opts.businessDays,

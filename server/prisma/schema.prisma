@@ -109,6 +109,11 @@ model LeaveRequest {
   leaveTypeId String    @map("leave_type_id")
   leaveType   LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
 
+  // Copy of leaveType.countsAgainstVacationBalance taken when the request was
+  // created. Balances read this copy, so editing a leave type never changes
+  // past balances. No default on purpose: the code must always set it.
+  countsAgainstVacationBalance Boolean @map("counts_against_vacation_balance")
+
   startDate    DateTime @map("start_date") @db.Date
   endDate      DateTime @map("end_date") @db.Date
   businessDays Int      @map("business_days")
