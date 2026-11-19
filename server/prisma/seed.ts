@@ -126,6 +126,12 @@ const USERS: UserSeed[] = [
 
 async function main() {
   // 1. Limpieza (hijo -> padre) para que el seed sea repetible sin duplicados.
+  // The audit log is append-only: its triggers reject DELETE and TRUNCATE.
+  // The dev seed opts in to TRUNCATE for this transaction only.
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT set_config('app.allow_audit_truncate', 'on', true)`;
+    await tx.$executeRaw`TRUNCATE "hr_audit_logs"`;
+  });
   await prisma.requestEvent.deleteMany();
   await prisma.balanceAdjustment.deleteMany();
   await prisma.leaveRequest.deleteMany();

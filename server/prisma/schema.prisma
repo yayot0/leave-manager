@@ -38,6 +38,21 @@ enum BalanceAdjustmentType {
   CARRYOVER
 }
 
+/// What an HR audit entry is about. RH-B will add EMPLOYEE and BALANCE_ADJUSTMENT.
+enum HrAuditEntity {
+  DEPARTMENT
+  LEAVE_TYPE
+  HOLIDAY
+}
+
+enum HrAuditAction {
+  CREATED
+  UPDATED
+  DEACTIVATED
+  REACTIVATED
+  DELETED
+}
+
 // ---------- Models ----------
 
 // Added by hand in migration leave_type_limits_and_department_restrict:
@@ -78,6 +93,7 @@ model User {
   requestEvents      RequestEvent[]      @relation("ActorEvents")
   balanceAdjustments BalanceAdjustment[] @relation("UserAdjustments")
   grantedAdjustments BalanceAdjustment[] @relation("GrantedByAdjustments")
+  hrAuditLogs        HrAuditLog[]        @relation("HrAuditActor")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -213,3 +229,33 @@ model BalanceAdjustment {
   @@map("balance_adjustments")
 }
 
+/// Append-only log of every change HR makes to the catalogs (and, from RH-B,
+/// to employees and balances). Written in the same transaction as the change.
+/// Never edited or deleted. Added by hand in migration hr_audit_log:
+/// trg_hr_audit_logs_append_only (rejects UPDATE/DELETE), trg_hr_audit_logs_no_truncate
+/// (rejects TRUNCATE unless the transaction sets app.allow_audit_truncate),
+/// chk_hr_audit_logs_snapshots_match_action (before/after match the action) and
+/// chk_hr_audit_logs_snapshots_are_objects (snapshots are JSON objects).
+model HrAuditLog {
+  id String @id @default(cuid())
+
+  actorId String @map("actor_id")
+  actor   User   @relation("HrAuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  entityType HrAuditEntity @map("entity_type")
+  /// No foreign key on purpose: the entity may be deleted (e.g. a department).
+  entityId   String        @map("entity_id")
+  action     HrAuditAction
+
+  /// Whitelisted snapshot of the entity before / after the change (ISO dates,
+  /// never secrets). NULL before CREATED and after DELETED.
+  before Json?
+  after  Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("hr_audit_logs")
+}

@@ -18,6 +18,9 @@ export function d(iso: string): Date {
 }
 
 const APP_TABLES = [
+  // Append-only: its triggers reject UPDATE/DELETE, and TRUNCATE unless the
+  // transaction sets app.allow_audit_truncate (resetDb does).
+  "hr_audit_logs",
   "request_events",
   "balance_adjustments",
   "leave_requests",
@@ -36,7 +39,12 @@ export async function resetDb(): Promise<void> {
     throw new Error(`resetDb refused: connected to "${dbName}", not a *_test database.`);
   }
   const tables = APP_TABLES.map((t) => `"${t}"`).join(", ");
-  await prisma.$executeRawUnsafe(`TRUNCATE ${tables} RESTART IDENTITY CASCADE`);
+  await prisma.$transaction(async (tx) => {
+    // hr_audit_logs blocks TRUNCATE unless the transaction opts in; the
+    // setting is local to this transaction (third argument `true`).
+    await tx.$queryRaw`SELECT set_config('app.allow_audit_truncate', 'on', true)`;
+    await tx.$executeRawUnsafe(`TRUNCATE ${tables} RESTART IDENTITY CASCADE`);
+  });
 }
 
 let userCounter = 0;
