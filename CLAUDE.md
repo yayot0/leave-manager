@@ -77,11 +77,13 @@ Frontend (desde `client/`):
   usan la MISMA validación (`server/src/modules/leave-requests/new-request-validation.ts`),
   para que nunca se contradigan. Dos fases:
   1. `evaluateRequestInput`: fecha pasada, fuera del periodo actual/siguiente, tipo inválido
-     o inactivo, 0 días hábiles. El POST la corre antes de la transacción.
+     o inactivo, 0 días hábiles, más días hábiles que el máximo del tipo. El POST la corre
+     antes de la transacción.
   2. `evaluateAgainstUserState`: encimadas y saldo del periodo del `startDate`. El POST la
      corre dentro de la transacción, después de `lockUser`.
 - Cada problema tiene un `code` (`START_IN_PAST`, `START_TOO_FAR`, `INVALID_LEAVE_TYPE`,
-  `NO_BUSINESS_DAYS` → 400; `OVERLAP` → 409; `INSUFFICIENT_BALANCE` → 422). El POST lanza el
+  `NO_BUSINESS_DAYS`, `EXCEEDS_TYPE_LIMIT` → 400; `OVERLAP` → 409; `INSUFFICIENT_BALANCE` → 422).
+  El POST lanza el
   primero y su error trae `{ error, code }`; el preview responde 200 con todos en
   `problems` y `canSubmit`. Los datos mal formados son 400 de Zod en ambos (el query del
   preview es `.strict()`: solo esos tres parámetros).
@@ -90,6 +92,16 @@ Frontend (desde `client/`):
   encimadas; con tipo inválido se salta la fase 2. En ambos casos el POST ya habría fallado
   en la fase 1, así que `canSubmit` sigue coincidiendo.
 - Toda regla nueva para crear solicitudes va en ese módulo, nunca solo en el POST.
+- `EXCEEDS_TYPE_LIMIT`: cada tipo tiene un máximo opcional de días hábiles por solicitud
+  (`maxBusinessDaysPerRequest`, null = sin límite; fines de semana y festivos no cuentan). Es
+  una regla de CREACIÓN: bajar el máximo no toca las solicitudes existentes (se pueden aprobar).
+  Seed: Vacaciones sin límite (el saldo ya la acota y el Art. 78 LFT pide al menos 12 días
+  continuos si se piden), Permiso con goce 5, sin goce 10, Día personal 1 (política de empresa).
+- La solicitud guarda una copia de `countsAgainstVacationBalance` de su tipo al crearse (columna
+  `leave_requests.counts_against_vacation_balance`, sin DEFAULT: el código siempre la escribe).
+  Saldo, el 422 al aprobar y `requesterBalance` usan esa copia, nunca el valor actual del tipo,
+  así editar un tipo nunca cambia saldos hacia atrás. La API la expone en `mine`, el detalle y
+  `pending-approvals`, y el cliente la usa ("Descuenta de tus vacaciones", texto de cancelar).
 - `GET /api/leave-requests/mine` (y el POST) incluyen `permissions.canCancel`, calculado con
   `transition()`; el cliente no reimplementa la máquina de estados.
 
@@ -105,6 +117,53 @@ Frontend (desde `client/`):
   `blocksApproval = available < 0`, la misma condición del 422 al aprobar. El cliente oculta
   "Aprobar" con `blocksApproval` y muestra el aviso; `permissions.canApprove` sigue siendo solo
   autorización (coincide con `pending-approvals`).
+
+## Catálogos de RH (Fase RH-A)
+- Todo `/api/hr` es solo para HR: `requireAuth` + `requireRole("HR")` a nivel de router (401 sin
+  sesión, 403 a cualquier otro rol). Entrada con Zod `.strict()`; los 409 traen `code`
+  (`DUPLICATE_NAME`, `DUPLICATE_CODE`, `DUPLICATE_DATE`, `DEPARTMENT_HAS_EMPLOYEES`).
+- Departamentos: listar (con `employeeCount`, activos e inactivos), crear, renombrar y borrar
+  SOLO si no tiene ningún empleado (activo o inactivo); si no, 409. No se desactivan: así la RH-B
+  no tiene que filtrar departamentos inactivos. La FK `users.department_id` es `RESTRICT`
+  (antes `SET NULL`) como segunda defensa.
+- Tipos de permiso: listar (incluidos inactivos, con `requestCount`), crear, editar y
+  desactivar/reactivar; nunca se borran. Editables: `name`, `countsAgainstVacationBalance`,
+  `maxBusinessDaysPerRequest`, `isActive`. El `code` NO se edita (identificador estable del seed,
+  integraciones y bitácora; mandarlo en el PATCH es 400). Todo cambio aplica solo a solicitudes
+  nuevas (por la copia y porque el límite es regla de creación). Un tipo inactivo no se ofrece
+  (`INVALID_LEAVE_TYPE`), pero sus solicitudes existentes se pueden decidir y cancelar.
+- Art. 78 LFT: un tipo que descuenta vacaciones solo admite máximo `null` o `>= 12`
+  (`LIMIT_BELOW_LFT_MINIMUM`, 400). Se evalúa sobre el tipo resultante (fila + cambio) y solo
+  cuando cambia "descuenta" o el máximo, así un registro viejo que no cumple aún se puede
+  renombrar o desactivar. Es regla del servicio, no CHECK de la base.
+- Concurrencia optimista en el PATCH de tipos: el cliente manda `expectedUpdatedAt` (el
+  `updatedAt` que cargó) y solo los campos que cambió; si alguien guardó antes, 409
+  `STALE_DATA` sin escribir ni registrar. Usar el mismo patrón en RH-B (empleados, saldos).
+- Nombres sin caracteres de control en ninguna posición (Zod `\p{Cc}`). Festivos solo de 2000 a
+  2100, igual que el listado por año.
+- Nombres únicos sin distinguir mayúsculas (`uq_*_name_lower` con `lower(name)`) y sin espacios
+  en los extremos (CHECK); el servicio revisa antes con el mismo criterio (SQL con `lower()`, no
+  `mode: "insensitive"`) y además mapea la violación de unicidad a 409.
+- Festivos: listar por año, agregar y quitar. `businessDays` se fija al crear la solicitud y NO
+  se recalcula: si se agrega un festivo, las solicitudes activas que lo cruzan quedan con un día
+  de más (siguen descontando un día que ya no es hábil); si se quita, con uno de menos.
+  `GET /api/hr/holidays/impact?date=` (y la respuesta del POST/DELETE) da
+  `{ affectedRequests, breakdown: { countingBalance, notCountingBalance, past, upcoming } }`:
+  cuántas PENDING/APPROVED cruzan la fecha, cuántas descuentan saldo según su COPIA y cuántas ya
+  terminaron (`endDate` antes de hoy en `APP_TIMEZONE`) o están en curso/por venir. Todo 0 si cae
+  en sábado o domingo (nunca contaron). El diálogo lo avisa antes de confirmar; las que descuentan
+  (también las ya terminadas, que siguen sumando en su periodo) pueden necesitar un ajuste.
+- Bitácora de RH (`hr_audit_logs`): quién (`actor_id`), sobre qué (`entity_type`, `entity_id`
+  sin FK porque la entidad puede borrarse), qué acción (`CREATED`, `UPDATED`, `DEACTIVATED`,
+  `REACTIVATED`, `DELETED`), foto `before`/`after` en JSON (campos en lista blanca, fechas ISO,
+  NUNCA secretos como `passwordHash`) y cuándo. Se escribe con `recordHrAudit(tx, ...)` en la
+  MISMA transacción que el cambio (un error no deja fila). Inmutable: triggers rechazan UPDATE,
+  DELETE y TRUNCATE (este último salvo `set_config('app.allow_audit_truncate','on', true)`, que
+  solo usan `resetDb` y el seed); CHECKs exigen que before/after coincidan con la acción y sean
+  objetos JSON. Para guardar NULL en un `Json?` usar `Prisma.DbNull`, no `null`.
+- Antes de leer la foto `before`, se bloquea la fila (`lockDepartment`/`lockLeaveType` con
+  `FOR NO KEY UPDATE`, para no frenar inserts que la referencian; `lockHoliday`).
+- Un cambio sin diferencias (mismo nombre, PATCH con los mismos valores) no escribe ni registra.
 
 ## Saldo de vacaciones (periodo y fechas)
 - El saldo es por periodo de aniversario a aniversario (no año calendario).
@@ -209,6 +268,34 @@ Frontend (desde `client/`):
 - Logout a propósito: `useLogout` marca la salida como deliberada y `ProtectedRoute` redirige
   a login sin `from`. No depende del orden entre la navegación de React Router (que es una
   transition) y la actualización de TanStack Query, que no está garantizado.
+- Administración (solo HR): `/administracion` es un índice y cada catálogo es una subruta en
+  `NAV_ITEMS` con `showInMenu: false` (`/administracion/departamentos`, `/tipos-de-permiso`,
+  `/festivos`); cualquier otra `/administracion/...` se niega. `matchNested: true` mantiene
+  resaltado "Administración" en el menú en sus subpáginas; `AdminSubnav` enlaza las secciones.
+- **Los diálogos de confirmación y de formulario viven FUERA de las filas y listas.** Un diálogo
+  dentro de una fila muere con la fila: tras un 404/409 la lista se refresca, la fila desaparece
+  y el error nunca se ve (el foco cae a `<body>`). Este bug ya apareció dos veces (4B/4C y RH-A).
+  Patrón: `useEntityDialog<T>()` (`src/hooks/use-entity-dialog.ts`) a nivel de página; la fila
+  solo tiene un botón que llama `show(entidad)` (con `aria-haspopup="dialog"` y un `aria-label`
+  con contexto); el diálogo se monta una vez con `key={session}` (formulario y mutación nuevos en
+  cada apertura) y trabaja con la foto de la entidad. `finalFocus` regresa al botón que lo abrió
+  si sigue en la página o al `h1`; tras borrar, `markRemoved()` manda el foco al `h1`.
+  (`CancelRequestDialog`/`DecisionDialog` conservan `useStickyDialog` porque su botón no vive en
+  una fila que pueda desaparecer; uno nuevo en una lista debe usar `useEntityDialog`.)
+- Catálogos: crear/editar con `CatalogFormDialog` (un `<form>` en `Dialog`) y confirmar con
+  `ConfirmActionDialog` (`AlertDialog`), ambos controlados por `useEntityDialog`. Una sola
+  mutación por diálogo (`useSaveDepartment(id?)`, `useSaveLeaveType()`). Los errores con campo
+  (`DUPLICATE_*`, `LIMIT_BELOW_LFT_MINIMUM`) van debajo de ese campo según `ApiError.code`
+  (`catalogFormError`) y el foco va a ese campo; al validar en el cliente, al primer campo
+  inválido. Los demás, en una alerta dentro del diálogo; tras un 404, 409 o `STALE_DATA` solo
+  queda "Volver", y ante cualquier error al confirmar el foco pasa a "Volver". Los mensajes de
+  éxito van en `ActionStatus` (región `role="status"` siempre montada); un aviso que aparece
+  después de abrir el diálogo (el impacto de un festivo) también va en una región `role="status"`
+  siempre montada y describe el botón de confirmar (`aria-describedby`). Entradas que llaman a la
+  API mientras se escribe (la fecha del festivo) pasan por `useDebouncedValue`. Query keys bajo
+  `["hr"]` (el impacto en `["hr","holiday-impact",fecha]`, fuera del prefijo de la lista);
+  cambiar un tipo invalida `["leave-types"]` y marca viejas (`refetchType: "none"`) todas las
+  de `["leave-requests"]`, que traen su nombre.
 - Títulos de sección: `CardTitle` es un `div`; envolver el texto en `<h2>`.
 - Textos de la interfaz en español; código en inglés.
 - `src/components/ui/` es código generado por shadcn: se puede editar, pero con
@@ -217,7 +304,7 @@ Frontend (desde `client/`):
   `renderApp(ruta)` (`src/test/render.tsx`) monta la app completa con las rutas reales.
   Consultar por rol y nombre accesible (`getByRole`, `getByLabelText`).
   `src/test/server.ts` trae respuestas por defecto (saldo, `mine` y `pending-approvals`
-  vacías, tipos, preview). Para el detalle usar `mockDetail(...)`: un `http.get(".../:id")`
+  vacías, tipos, preview, catálogos de RH vacíos e impacto 0). Para el detalle usar `mockDetail(...)`: un `http.get(".../:id")`
   suelto también atrapa `/mine` y `/preview` y esconde errores. Para estados de carga, `deferred()` (`src/test/deferred.ts`)
   detiene una respuesta hasta que el test la suelta; para debounces, timers falsos solo de
   `setTimeout`/`clearTimeout`. Fixtures en `src/test/fixtures.ts`.
@@ -232,7 +319,13 @@ Frontend (desde `client/`):
 - Toda migración nueva se crea con `npx prisma migrate dev --create-only` y se revisa
   con el agente db-architect ANTES de correr cualquier test: el `globalSetup` de los
   tests de integración corre `prisma migrate deploy` y aplica a `leave_manager_test`
-  cualquier migración que exista en la carpeta, revisada o no.
+  cualquier migración que exista en la carpeta, revisada o no. Si hay varias migraciones
+  seguidas sin revisar, generar el SQL de las siguientes con `prisma migrate diff
+  --from-schema <antes> --to-schema <después> --script` (no toca la base) en lugar de aplicar
+  la anterior. Después de aplicarlas, correr `npx prisma migrate dev` otra vez y confirmar que
+  diga "Already in sync": CHECKs, triggers e índices por expresión (`lower(name)`) no viven en
+  `schema.prisma`, así que hay que verificar que Prisma no proponga quitarlos. Documentar en
+  `schema.prisma`, junto al modelo, cada constraint agregado a mano.
 
 ## Pendientes técnicos
 - CORS: no se usa, porque frontend y API comparten origen. Para producción, servir
@@ -268,19 +361,9 @@ Frontend (desde `client/`):
 - Migrar `DATABASE_URL` (hoy leído directo de `process.env` en `server/src/db/prisma.ts`)
   al schema de Zod de `server/src/config/env.ts`, por consistencia con el resto de las
   variables de entorno.
-- Guardar en `leave_requests` si la solicitud descontaba saldo al crearla (copia de
-  `countsAgainstVacationBalance`), o impedir editar ese campo en tipos que ya tienen
-  solicitudes; hoy el saldo lo lee del tipo en el momento del cálculo, así que
-  cambiarlo altera saldos hacia atrás. Decidirlo antes del CRUD de tipos para HR.
-  Relacionado: la fase 1 de la creación lee el tipo y los festivos fuera del lock, así que un
-  cambio de RH en ese instante no se ve (ventana de milisegundos).
-- Límite de días por solicitud en tipos que no descuentan saldo: hoy no tienen tope (p. ej.
-  se pudo pedir un "Día personal" de 22 días hábiles), porque el saldo es lo único que acota
-  una solicitud. Como parte del CRUD de tipos de permiso (fase de RH), agregar un máximo de
-  días hábiles por solicitud configurable por tipo (p. ej. `maxBusinessDaysPerRequest`,
-  opcional = sin límite) y validarlo en `new-request-validation.ts` con un `ProblemCode` propio
-  (p. ej. `EXCEEDS_TYPE_LIMIT`), para que el POST y la vista previa lo apliquen igual. La
-  migración se revisa con db-architect antes de correr tests.
+- La fase 1 de la creación lee el tipo y los festivos fuera del lock, así que un cambio de RH
+  en ese instante no se ve (ventana de milisegundos). La copia se toma del mismo tipo que se
+  validó, así que saldo y copia siempre coinciden.
 - Usar el mismo bloqueo por usuario (`lockUser` de `server/src/db/locks.ts`, dentro de
   la transacción) en los ajustes de saldo de HR y en cualquier futura modificación de
   solicitudes; el bloqueo solo serializa a quienes lo toman. (Crear, aprobar, rechazar
@@ -302,6 +385,38 @@ Frontend (desde `client/`):
   solicitud ajena regresa a Aprobaciones; cuando HR llegue desde otras pantallas (empleados,
   reportes) debe regresar a la de origen (otro valor literal de router state, como
   `FROM_APPROVALS_STATE`).
+- **Obligatorio antes del despliegue (Fase 6): roles de base de datos.** La app no debe
+  conectarse como dueña de las tablas (hoy `leave_admin`): un dueño puede hacer
+  `ALTER TABLE ... DISABLE TRIGGER` y saltarse la inmutabilidad de `hr_audit_logs`. Usar un rol
+  dueño solo para migrar y un rol de la app sin TRUNCATE ni ALTER, con solo `SELECT`/`INSERT`
+  sobre `hr_audit_logs` (el trigger de TRUNCATE es una defensa extra, no sustituye el permiso).
+- RH-B (empleados): los empleados nuevos entran con una contraseña temporal que deben cambiar en
+  su primer inicio de sesión (p. ej. `mustChangePassword` en `users`; mientras sea `true` la API
+  solo permite cambiar la contraseña y cerrar sesión). La bitácora registrará empleados y ajustes
+  (`ALTER TYPE "HrAuditEntity" ADD VALUE` no deja usar el valor nuevo en la misma transacción:
+  si un CHECK lo usa, separar en dos migraciones). Las fotos de usuario NUNCA incluyen
+  `passwordHash`.
+- Festivos: recalcular `businessDays` de las solicitudes activas afectadas al agregar o quitar
+  un festivo (hoy solo se avisa con el desglose). Si se hace, en la misma transacción, con evento
+  `MODIFIED` y `lockUser`, y decidir qué pasa si quitar un festivo deja un saldo negativo.
+- Límite por solicitud esquivable: `EXCEEDS_TYPE_LIMIT` revisa una sola solicitud, así que un
+  "Día personal" (máx. 1) se puede pedir lunes, martes y miércoles en tres solicitudes pegadas.
+  Solución futura: un tope OPCIONAL de días hábiles por año para cada tipo (p. ej.
+  `maxBusinessDaysPerYear`, null = sin tope; definir si "año" es calendario o el periodo de
+  aniversario), validado en la fase 2 de `new-request-validation.ts` (dentro del lock, sumando
+  PENDING/APPROVED del mismo tipo según la copia) con su propio `ProblemCode`, para que POST y
+  vista previa coincidan. Alternativa o complemento: sumar las solicitudes contiguas del mismo
+  tipo al aplicar el máximo por solicitud. Requiere migración (db-architect).
+- Política de tipos por decidir: (a) impedir que el tipo `VAC` deje de descontar vacaciones (o
+  pedir confirmación explícita), porque sin tope las vacaciones nuevas no las acotaría nada;
+  (b) un tipo `PATERNIDAD` propio (Art. 132 fr. XXVII Bis: 5 días laborables con goce; confirmar
+  la ley vigente) que no se pueda bajar del mínimo legal, separado del "Permiso con goce"
+  discrecional; (c) jornadas que incluyen sábado (hoy los días hábiles son lunes a viernes).
+- `updatedAt` (`@updatedAt` de Prisma) tiene precisión de milisegundos: dos guardados en el mismo
+  milisegundo no se distinguirían en `STALE_DATA`. Si llega a importar, usar una columna
+  `version` entera.
+- Pantalla para consultar la bitácora de RH (filtros por entidad y por actor; ordenar por
+  `createdAt` y luego `id`, porque varias filas de una transacción comparten `created_at`).
 - `availableWithoutRequest` supone que la propia solicitud cae en el periodo calculado; dejaría
   de ser cierto si RH pudiera mover `hireDate` después de su `startDate`. Revisarlo en el CRUD
   de empleados.
