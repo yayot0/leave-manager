@@ -62,10 +62,11 @@ async function balance(ctx: Ctx) {
   return res.body.balance as { available: number; pending: number; approved: number };
 }
 
-/** HR editing the type (directly in the DB until the HR endpoints exist). */
-async function setCounts(_ctx: Ctx, typeId: string, value: boolean) {
-  await prisma.leaveType.update({ where: { id: typeId }, data: { countsAgainstVacationBalance: value } });
-  return { status: 200 };
+function setCounts(ctx: Ctx, typeId: string, value: boolean) {
+  return request(app)
+    .patch(`/api/hr/leave-types/${typeId}`)
+    .set("Cookie", ctx.hrCookie)
+    .send({ countsAgainstVacationBalance: value });
 }
 
 const approve = (ctx: Ctx, id: string) =>

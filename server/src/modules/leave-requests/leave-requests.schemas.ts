@@ -4,7 +4,7 @@ import { diffInDays, parseISODate } from "../../domain/dates.js";
 /** Longest range accepted in a single request (also bounds countBusinessDays). */
 export const MAX_REQUEST_RANGE_DAYS = 366;
 
-const isoDate = z
+export const isoDate = z
   .string()
   .transform((value, ctx) => {
     const date = parseISODate(value);

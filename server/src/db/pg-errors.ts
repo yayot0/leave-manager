@@ -22,19 +22,71 @@ export const OVERLAP_CONSTRAINT = "excl_leave_requests_no_overlapping_active_ran
  * (verified empirically with Prisma 7.10).
  */
 export function isOverlapConstraintViolation(err: unknown): boolean {
-  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) {
-    return false;
-  }
-  const cause = (err.meta?.driverAdapterError as { cause?: unknown } | undefined)?.cause as
-    | { code?: unknown; originalCode?: unknown; message?: unknown }
-    | undefined;
-  if (!cause) {
-    return false;
-  }
-  const code = cause.originalCode ?? cause.code;
+  const cause = driverCause(err);
   return (
-    code === EXCLUSION_VIOLATION &&
+    cause !== undefined &&
+    (cause.originalCode ?? cause.code) === EXCLUSION_VIOLATION &&
     typeof cause.message === "string" &&
     cause.message.includes(OVERLAP_CONSTRAINT)
   );
+}
+
+/** Postgres SQLSTATE for unique_violation. */
+const UNIQUE_VIOLATION = "23505";
+
+/**
+ * True when `err` is a unique violation: Prisma's P2002 for the indexes it
+ * manages, or the raw SQLSTATE 23505 for the ones added by hand (e.g.
+ * uq_departments_name_lower), which Prisma may not map to P2002.
+ */
+export function isUniqueViolation(err: unknown): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) {
+    return false;
+  }
+  if (err.code === "P2002") {
+    return true;
+  }
+  const cause = driverCause(err);
+  return cause !== undefined && (cause.originalCode ?? cause.code) === UNIQUE_VIOLATION;
+}
+
+/** Postgres SQLSTATE for foreign_key_violation (e.g. ON DELETE RESTRICT). */
+const FOREIGN_KEY_VIOLATION = "23503";
+
+/**
+ * True when `err` is a violation of the foreign key `constraint` (e.g.
+ * "users_department_id_fkey"): Prisma's P2003 or the raw SQLSTATE 23503,
+ * and only that constraint, so another FK failing in the same transaction is
+ * never mistaken for it.
+ */
+export function isForeignKeyViolation(err: unknown, constraint: string): boolean {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) {
+    return false;
+  }
+  const cause = driverCause(err);
+  const isFk = err.code === "P2003" || (cause !== undefined && (cause.originalCode ?? cause.code) === FOREIGN_KEY_VIOLATION);
+  if (!isFk) {
+    return false;
+  }
+  // The constraint name travels in the pg message and/or Prisma's meta.
+  const where = `${typeof cause?.message === "string" ? cause.message : ""} ${JSON.stringify(err.meta ?? {})}`;
+  return where.includes(constraint);
+}
+
+interface DriverCause {
+  code?: unknown;
+  originalCode?: unknown;
+  message?: unknown;
+}
+
+/**
+ * The original pg error behind a Prisma error. With @prisma/adapter-pg it
+ * lives in meta.driverAdapterError.cause (verified empirically with Prisma
+ * 7.10).
+ */
+function driverCause(err: unknown): DriverCause | undefined {
+  if (!(err instanceof Prisma.PrismaClientKnownRequestError)) {
+    return undefined;
+  }
+  return (err.meta?.driverAdapterError as { cause?: unknown } | undefined)?.cause as DriverCause | undefined;
 }

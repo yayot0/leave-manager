@@ -162,16 +162,16 @@ describe("EXCEEDS_TYPE_LIMIT: maxBusinessDaysPerRequest of the leave type", () =
     expect(codes(res)).toEqual(["START_IN_PAST", "EXCEEDS_TYPE_LIMIT"]);
   });
 
-  it("raising the limit lets the same request through", async () => {
+  it("raising the limit through HR lets the same request through", async () => {
     const ctx = await setup({ max: 1 });
     expect((await post(ctx, "2026-11-16", "2026-11-17")).status).toBe(400);
-    await prisma.leaveType.update({ where: { id: ctx.type.id }, data: { maxBusinessDaysPerRequest: 2 } });
+    await request(app).patch(`/api/hr/leave-types/${ctx.type.id}`).set("Cookie", ctx.hrCookie).send({ maxBusinessDaysPerRequest: 2 });
     expect((await post(ctx, "2026-11-16", "2026-11-17")).status).toBe(201);
   });
 
-  it("removing the limit (null) lets a long request through", async () => {
+  it("removing the limit (null) through HR lets a long request through", async () => {
     const ctx = await setup({ max: 1 });
-    await prisma.leaveType.update({ where: { id: ctx.type.id }, data: { maxBusinessDaysPerRequest: null } });
+    await request(app).patch(`/api/hr/leave-types/${ctx.type.id}`).set("Cookie", ctx.hrCookie).send({ maxBusinessDaysPerRequest: null });
     expect((await post(ctx, "2026-11-16", "2026-11-20")).status).toBe(201);
   });
 
@@ -180,7 +180,11 @@ describe("EXCEEDS_TYPE_LIMIT: maxBusinessDaysPerRequest of the leave type", () =
     const created = await post(ctx, "2026-11-16", "2026-11-20");
     expect(created.status).toBe(201);
 
-    await prisma.leaveType.update({ where: { id: ctx.type.id }, data: { maxBusinessDaysPerRequest: 1 } });
+    const lowered = await request(app)
+      .patch(`/api/hr/leave-types/${ctx.type.id}`)
+      .set("Cookie", ctx.hrCookie)
+      .send({ maxBusinessDaysPerRequest: 1 });
+    expect(lowered.status).toBe(200);
 
     const row = await prisma.leaveRequest.findUniqueOrThrow({ where: { id: created.body.leaveRequest.id } });
     expect(row).toMatchObject({ status: "PENDING", businessDays: 5 });
