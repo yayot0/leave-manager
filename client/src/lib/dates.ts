@@ -72,6 +72,13 @@ export function formatShortDate(value: string): string {
   return formatWith(shortDate, value);
 }
 
+const weekday = new Intl.DateTimeFormat(LOCALE, { timeZone: "UTC", weekday: "long" });
+
+/** "2026-03-01" → "domingo" (the day of THAT date, not shifted by the browser's timezone). */
+export function formatWeekday(value: string): string {
+  return formatWith(weekday, value);
+}
+
 /** A date range; a single day when both ends are equal. */
 export function formatDateRange(start: string, end: string, format: (value: string) => string = formatDate): string {
   return start === end ? format(start) : `${format(start)} al ${format(end)}`;

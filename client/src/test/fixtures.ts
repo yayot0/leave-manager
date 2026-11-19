@@ -1,4 +1,7 @@
 import type {
+  Department,
+  Holiday,
+  HrLeaveType,
   LeaveRequest,
   LeaveRequestDetail,
   LeaveRequestPreview,
@@ -159,3 +162,37 @@ export function buildPendingApproval(overrides: Partial<PendingApproval> = {}): 
   };
 }
 
+// ---------- HR catalogs ----------
+
+export function buildDepartment(overrides: Partial<Department> = {}): Department {
+  return {
+    id: "dep-1",
+    name: "Ventas",
+    employeeCount: 0,
+    createdAt: "2026-01-10T16:00:00.000Z",
+    updatedAt: "2026-01-10T16:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildHrLeaveType(overrides: Partial<HrLeaveType> = {}): HrLeaveType {
+  return {
+    ...VACATION_TYPE,
+    isActive: true,
+    requestCount: 0,
+    createdAt: "2026-01-10T16:00:00.000Z",
+    updatedAt: "2026-01-10T16:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildHoliday(overrides: Partial<Holiday> = {}): Holiday {
+  return {
+    id: "hol-1",
+    date: "2026-11-16",
+    name: "Día de la Revolución Mexicana",
+    createdAt: "2026-01-10T16:00:00.000Z",
+    updatedAt: "2026-01-10T16:00:00.000Z",
+    ...overrides,
+  };
+}

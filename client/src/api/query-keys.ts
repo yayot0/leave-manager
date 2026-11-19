@@ -19,4 +19,12 @@ export const queryKeys = {
   leaveRequestDetail: (id: string) => ["leave-requests", "detail", id] as const,
   leaveRequestPreviews: ["leave-requests", "preview"] as const,
   leaveRequestPreview: (input: PreviewInput) => ["leave-requests", "preview", input] as const,
+  // HR catalogs live under ["hr"]: cleared with everything else on a user change.
+  hrDepartments: ["hr", "departments"] as const,
+  hrLeaveTypes: ["hr", "leave-types"] as const,
+  hrHolidays: ["hr", "holidays"] as const,
+  hrHolidaysOfYear: (year: number) => ["hr", "holidays", year] as const,
+  // Not under ["hr", "holidays"]: refreshing the list must not refetch the
+  // impact of the dialog that is closing.
+  hrHolidayImpact: (date: string) => ["hr", "holiday-impact", date] as const,
 };

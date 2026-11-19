@@ -8,6 +8,9 @@ import { NewRequestPage } from "@/pages/NewRequestPage";
 import { ApprovalsPage } from "@/pages/ApprovalsPage";
 import { AdminPage } from "@/pages/AdminPage";
 import { RequestDetailPage } from "@/pages/RequestDetailPage";
+import { DepartmentsPage } from "@/pages/admin/DepartmentsPage";
+import { LeaveTypesPage } from "@/pages/admin/LeaveTypesPage";
+import { HolidaysPage } from "@/pages/admin/HolidaysPage";
 
 import { HOME_ROUTE, requestDetailPath, ROUTES } from "./paths";
 
@@ -21,6 +24,8 @@ export interface NavItem {
   Component: ComponentType;
   /** false for pages reached from inside another page (e.g. a detail). */
   showInMenu?: boolean;
+  /** The menu entry stays highlighted on its sub-pages (e.g. /administracion/festivos). */
+  matchNested?: boolean;
 }
 
 const ALL_ROLES: readonly Role[] = ["EMPLOYEE", "MANAGER", "HR"];
@@ -48,7 +53,33 @@ export const NAV_ITEMS: readonly NavItem[] = [
     showInMenu: false,
   },
   { to: ROUTES.approvals, label: "Aprobaciones", icon: ClipboardCheck, roles: ["MANAGER", "HR"], Component: ApprovalsPage },
-  { to: ROUTES.admin, label: "Administración", icon: Settings, roles: ["HR"], Component: AdminPage },
+  { to: ROUTES.admin, label: "Administración", icon: Settings, roles: ["HR"], Component: AdminPage, matchNested: true },
+  // Administration sub-pages: HR only, reached from Administración (default
+  // deny still applies: any other /administracion/... path is not in this list).
+  {
+    to: ROUTES.adminDepartments,
+    label: "Departamentos",
+    icon: Settings,
+    roles: ["HR"],
+    Component: DepartmentsPage,
+    showInMenu: false,
+  },
+  {
+    to: ROUTES.adminLeaveTypes,
+    label: "Tipos de permiso",
+    icon: Settings,
+    roles: ["HR"],
+    Component: LeaveTypesPage,
+    showInMenu: false,
+  },
+  {
+    to: ROUTES.adminHolidays,
+    label: "Festivos",
+    icon: Settings,
+    roles: ["HR"],
+    Component: HolidaysPage,
+    showInMenu: false,
+  },
 ];
 
 export function navItemsFor(role: Role): NavItem[] {
