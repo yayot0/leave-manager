@@ -40,6 +40,8 @@ enum BalanceAdjustmentType {
 
 // ---------- Models ----------
 
+// Added by hand in migration leave_type_limits_and_department_restrict:
+// uq_departments_name_lower (unique ignoring case) and chk_departments_name_trimmed.
 model Department {
   id   String @id @default(cuid())
   name String @unique
@@ -63,7 +65,9 @@ model User {
   isActive     Boolean  @default(true) @map("is_active")
 
   departmentId String?     @map("department_id")
-  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  // Restrict: a department with employees (active or not) cannot be deleted;
+  // the API answers 409 first, this is the second line of defense.
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: Restrict)
 
   managerId     String? @map("manager_id")
   manager       User?   @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
@@ -84,12 +88,18 @@ model User {
   @@map("users")
 }
 
+// Added by hand in migration leave_type_limits_and_department_restrict:
+// uq_leave_types_name_lower (unique ignoring case), chk_leave_types_name_trimmed
+// and chk_leave_types_code_format (uppercase identifier).
 model LeaveType {
   id                           String  @id @default(cuid())
   name                         String  @unique
   code                         String  @unique
   countsAgainstVacationBalance Boolean @default(true) @map("counts_against_vacation_balance")
   isActive                     Boolean @default(true) @map("is_active")
+  // Most business days one request of this type may cover; null = no limit.
+  // CHECK chk_leave_types_max_business_days_range (added by hand) keeps it in 1..366.
+  maxBusinessDaysPerRequest    Int?    @map("max_business_days_per_request")
 
   leaveRequests      LeaveRequest[]
   balanceAdjustments BalanceAdjustment[]
@@ -156,7 +166,7 @@ model RequestEvent {
   actor   User?   @relation("ActorEvents", fields: [actorId], references: [id], onDelete: Restrict)
 
   action RequestEventAction
-  note   String? @db.Text
+  note   String?            @db.Text
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -165,6 +175,7 @@ model RequestEvent {
   @@map("request_events")
 }
 
+// CHECK chk_holidays_name_trimmed added by hand (migration leave_type_limits_and_department_restrict).
 model Holiday {
   id   String   @id @default(cuid())
   date DateTime @unique @db.Date
@@ -201,3 +212,4 @@ model BalanceAdjustment {
   @@index([grantedById])
   @@map("balance_adjustments")
 }
+

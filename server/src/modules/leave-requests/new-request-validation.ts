@@ -26,6 +26,7 @@ export type ProblemCode =
   | "START_TOO_FAR"
   | "INVALID_LEAVE_TYPE"
   | "NO_BUSINESS_DAYS"
+  | "EXCEEDS_TYPE_LIMIT"
   | "OVERLAP"
   | "INSUFFICIENT_BALANCE";
 
@@ -40,6 +41,7 @@ const PROBLEM_ERROR: Record<ProblemCode, (message: string) => AppError> = {
   START_TOO_FAR: (message) => new BadRequestError(message),
   INVALID_LEAVE_TYPE: (message) => new BadRequestError(message),
   NO_BUSINESS_DAYS: (message) => new BadRequestError(message),
+  EXCEEDS_TYPE_LIMIT: (message) => new BadRequestError(message),
   OVERLAP: (message) => new ConflictError(message),
   INSUFFICIENT_BALANCE: (message) => new UnprocessableEntityError(message),
 };
@@ -73,6 +75,7 @@ const leaveTypeSelect = {
   code: true,
   name: true,
   countsAgainstVacationBalance: true,
+  maxBusinessDaysPerRequest: true,
   isActive: true,
 } as const;
 
@@ -81,6 +84,8 @@ export interface EvaluatedLeaveType {
   code: string;
   name: string;
   countsAgainstVacationBalance: boolean;
+  /** Most business days one request may cover; null = no limit. */
+  maxBusinessDaysPerRequest: number | null;
 }
 
 interface RequestDates {
@@ -155,6 +160,18 @@ export async function evaluateRequestInput(
     problems.push({
       code: "NO_BUSINESS_DAYS",
       message: "El rango no incluye días hábiles (solo fines de semana o festivos)",
+    });
+  }
+
+  // Phase 1: it depends only on the input and the leave type. The limit is a
+  // rule for creating requests; lowering it never touches existing ones.
+  const limit = leaveType?.maxBusinessDaysPerRequest ?? null;
+  if (leaveType && limit !== null && businessDays > limit) {
+    problems.push({
+      code: "EXCEEDS_TYPE_LIMIT",
+      message:
+        `${leaveType.name} permite máximo ${limit} ${limit === 1 ? "día hábil" : "días hábiles"} ` +
+        `por solicitud; esta tiene ${businessDays}`,
     });
   }
 

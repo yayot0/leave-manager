@@ -246,7 +246,13 @@ describe("GET /api/leave-requests/preview - happy path", () => {
     expect(res.body).toEqual({
       preview: {
         businessDays: 9,
-        leaveType: { id: vacation.id, code: "VAC", name: "Vacaciones", countsAgainstVacationBalance: true },
+        leaveType: {
+          id: vacation.id,
+          code: "VAC",
+          name: "Vacaciones",
+          countsAgainstVacationBalance: true,
+          maxBusinessDaysPerRequest: null,
+        },
         balance: {
           period: { start: "2026-02-01", end: "2027-01-31" },
           available: 16,
@@ -624,7 +630,13 @@ describe("GET /api/leave-requests/preview - leave type that does not count again
     const res = await preview(cookie, { leaveTypeId: sick.id, startDate: "2026-11-16", endDate: "2026-11-20" });
     expect(res.body.preview).toEqual({
       businessDays: 5,
-      leaveType: { id: sick.id, code: "SICK", name: "Incapacidad", countsAgainstVacationBalance: false },
+      leaveType: {
+        id: sick.id,
+        code: "SICK",
+        name: "Incapacidad",
+        countsAgainstVacationBalance: false,
+        maxBusinessDaysPerRequest: null,
+      },
       balance: null,
       problems: [],
       canSubmit: true,

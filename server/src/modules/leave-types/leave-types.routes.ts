@@ -8,7 +8,14 @@ leaveTypesRouter.get("/", requireAuth, async (_req, res) => {
   const leaveTypes = await prisma.leaveType.findMany({
     where: { isActive: true },
     orderBy: { name: "asc" },
-    select: { id: true, code: true, name: true, countsAgainstVacationBalance: true },
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      countsAgainstVacationBalance: true,
+      // Lets the new-request form show "máximo N días hábiles" before asking.
+      maxBusinessDaysPerRequest: true,
+    },
   });
   res.json({ leaveTypes });
 });

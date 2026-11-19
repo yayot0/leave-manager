@@ -61,11 +61,14 @@ const DEPARTMENTS = [
   "Finanzas",
 ] as const;
 
+// maxBusinessDaysPerRequest is company policy (the LFT does not regulate these
+// permissions). Vacaciones has no limit: the balance already bounds it, and
+// Art. 78 LFT lets the worker ask for at least 12 continuous days.
 const LEAVE_TYPES = [
-  { code: "VAC", name: "Vacaciones", countsAgainstVacationBalance: true },
-  { code: "PERM_GOCE", name: "Permiso con goce de sueldo", countsAgainstVacationBalance: false },
-  { code: "PERM_SIN_GOCE", name: "Permiso sin goce de sueldo", countsAgainstVacationBalance: false },
-  { code: "PERSONAL", name: "Día personal", countsAgainstVacationBalance: false },
+  { code: "VAC", name: "Vacaciones", countsAgainstVacationBalance: true, maxBusinessDaysPerRequest: null },
+  { code: "PERM_GOCE", name: "Permiso con goce de sueldo", countsAgainstVacationBalance: false, maxBusinessDaysPerRequest: 5 },
+  { code: "PERM_SIN_GOCE", name: "Permiso sin goce de sueldo", countsAgainstVacationBalance: false, maxBusinessDaysPerRequest: 10 },
+  { code: "PERSONAL", name: "Día personal", countsAgainstVacationBalance: false, maxBusinessDaysPerRequest: 1 },
 ] as const;
 
 // ---------- Personas de Grupo Norte ----------
@@ -146,6 +149,7 @@ async function main() {
         code: lt.code,
         name: lt.name,
         countsAgainstVacationBalance: lt.countsAgainstVacationBalance,
+        maxBusinessDaysPerRequest: lt.maxBusinessDaysPerRequest,
       },
     });
     leaveTypesByCode.set(lt.code, {

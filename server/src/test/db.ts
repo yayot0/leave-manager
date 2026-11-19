@@ -67,7 +67,13 @@ export async function createUser(
 }
 
 export async function createLeaveType(
-  overrides: { code?: string; name?: string; countsAgainstVacationBalance?: boolean; isActive?: boolean } = {},
+  overrides: {
+    code?: string;
+    name?: string;
+    countsAgainstVacationBalance?: boolean;
+    isActive?: boolean;
+    maxBusinessDaysPerRequest?: number | null;
+  } = {},
 ) {
   const code = overrides.code ?? `T${++userCounter}`;
   return prisma.leaveType.create({
@@ -76,6 +82,7 @@ export async function createLeaveType(
       name: overrides.name ?? `Tipo ${code}`,
       countsAgainstVacationBalance: overrides.countsAgainstVacationBalance ?? true,
       isActive: overrides.isActive ?? true,
+      maxBusinessDaysPerRequest: overrides.maxBusinessDaysPerRequest ?? null,
     },
   });
 }
