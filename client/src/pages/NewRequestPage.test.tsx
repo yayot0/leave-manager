@@ -179,6 +179,58 @@ describe("NewRequestPage", () => {
       expect(await within(previewRegion()).findByText("Permiso personal no descuenta de tus vacaciones.")).toBeInTheDocument();
     });
 
+    it("shows the type's limit under the select, before asking for dates", async () => {
+      mockSession(buildUser("EMPLOYEE"));
+      const { user } = renderApp("/solicitudes/nueva");
+      await waitForTypes();
+
+      const select = screen.getByLabelText("Tipo de permiso");
+      // Vacaciones has no limit: no hint.
+      await user.selectOptions(select, "Vacaciones");
+      expect(screen.queryByText(/por solicitud\./)).not.toBeInTheDocument();
+
+      await user.selectOptions(select, "Permiso personal");
+      expect(screen.getByText("Máximo 1 día hábil por solicitud.")).toBeInTheDocument();
+      expect(select).toHaveAccessibleDescription("Máximo 1 día hábil por solicitud.");
+    });
+
+    it("shows EXCEEDS_TYPE_LIMIT from the preview, and the POST's 400 if sent anyway", async () => {
+      mockSession(buildUser("EMPLOYEE"));
+      mockPreview(
+        buildPreview({
+          businessDays: 3,
+          leaveType: PERSONAL_TYPE,
+          balance: null,
+          canSubmit: false,
+          problems: [
+            { code: "EXCEEDS_TYPE_LIMIT", message: "Permiso personal permite máximo 1 día hábil por solicitud; esta tiene 3" },
+          ],
+        }),
+      );
+      const { user } = renderApp("/solicitudes/nueva");
+      await waitForTypes();
+      await fillForm(user, { type: "Permiso personal", start: "2026-12-01", end: "2026-12-03" });
+
+      const region = previewRegion();
+      expect(await within(region).findByText(/permite máximo 1 día hábil por solicitud; esta tiene 3/)).toBeInTheDocument();
+
+      // The API decides: sending anyway gets the same problem as a 400 with its code.
+      server.use(
+        http.post("/api/leave-requests", () =>
+          HttpResponse.json(
+            { error: "Permiso personal permite máximo 1 día hábil por solicitud; esta tiene 3", code: "EXCEEDS_TYPE_LIMIT" },
+            { status: 400 },
+          ),
+        ),
+      );
+      await user.click(screen.getByRole("button", { name: "Enviar solicitud" }));
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("esta tiene 3");
+      // It is about the range, not the type: the dates are marked, the type is not.
+      expect(screen.getByLabelText("Fecha de inicio")).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByLabelText("Tipo de permiso")).not.toHaveAttribute("aria-invalid");
+    });
+
     it("lists every problem the server finds, with the resulting balance", async () => {
       mockSession(buildUser("EMPLOYEE"));
       mockPreview(

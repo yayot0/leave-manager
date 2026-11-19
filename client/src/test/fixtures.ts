@@ -37,6 +37,7 @@ export const VACATION_TYPE: LeaveType = {
   code: "VAC",
   name: "Vacaciones",
   countsAgainstVacationBalance: true,
+  maxBusinessDaysPerRequest: null,
 };
 
 export const PERSONAL_TYPE: LeaveType = {
@@ -44,6 +45,7 @@ export const PERSONAL_TYPE: LeaveType = {
   code: "PERSONAL",
   name: "Permiso personal",
   countsAgainstVacationBalance: false,
+  maxBusinessDaysPerRequest: 1,
 };
 
 export function buildBalance(overrides: Partial<VacationBalance> = {}): VacationBalance {
@@ -61,7 +63,10 @@ export function buildBalance(overrides: Partial<VacationBalance> = {}): Vacation
 }
 
 export function buildLeaveRequest(overrides: Partial<LeaveRequest> = {}): LeaveRequest {
+  const leaveType = overrides.leaveType ?? VACATION_TYPE;
   return {
+    // The request's copy defaults to its type's value, as the API stores it.
+    countsAgainstVacationBalance: leaveType.countsAgainstVacationBalance,
     id: "req-1",
     startDate: "2026-12-01",
     endDate: "2026-12-03",
@@ -81,7 +86,9 @@ export const EMPLOYEE_PERSON: Person = { id: "user-employee", firstName: "Ana", 
 export const MANAGER_PERSON: Person = { id: "user-manager", firstName: "Luis", lastName: "Pérez" };
 
 export function buildDetail(overrides: Partial<LeaveRequestDetail> = {}): LeaveRequestDetail {
+  const leaveType = overrides.leaveType ?? VACATION_TYPE;
   return {
+    countsAgainstVacationBalance: leaveType.countsAgainstVacationBalance,
     id: "req-1",
     startDate: "2026-12-01",
     endDate: "2026-12-03",
@@ -136,7 +143,9 @@ export function buildRequesterBalance(overrides: Partial<RequesterBalance> = {})
 }
 
 export function buildPendingApproval(overrides: Partial<PendingApproval> = {}): PendingApproval {
+  const leaveType = overrides.leaveType ?? VACATION_TYPE;
   return {
+    countsAgainstVacationBalance: leaveType.countsAgainstVacationBalance,
     id: "req-1",
     startDate: "2026-12-01",
     endDate: "2026-12-03",
@@ -149,3 +158,4 @@ export function buildPendingApproval(overrides: Partial<PendingApproval> = {}): 
     ...overrides,
   };
 }
+

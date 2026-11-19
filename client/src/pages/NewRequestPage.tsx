@@ -162,6 +162,7 @@ export function NewRequestPage() {
   const endId = useId();
   const reasonId = useId();
   const reasonHintId = useId();
+  const typeHintId = useId();
   const errorId = useId();
 
   /** Editing after a failed submit clears that error: it was about the old values. */
@@ -188,7 +189,16 @@ export function NewRequestPage() {
   const typeInvalid = fieldError && submitError.code === "INVALID_LEAVE_TYPE";
   const datesInvalid = fieldError && !typeInvalid;
   const invalidProps = { "aria-invalid": true, "aria-describedby": errorId } as const;
-  const typeFieldProps = typeInvalid ? invalidProps : {};
+  // The type's limit, shown before asking for dates; the API enforces it
+  // (EXCEEDS_TYPE_LIMIT in the preview and the POST).
+  const selectedType = leaveTypes.data?.find((type) => type.id === leaveTypeId);
+  const typeLimit = selectedType?.maxBusinessDaysPerRequest ?? null;
+  const typeHint = typeLimit === null ? null : `Máximo ${formatBusinessDays(typeLimit)} por solicitud.`;
+  const typeDescribedBy = [typeInvalid ? errorId : null, typeHint ? typeHintId : null].filter(Boolean).join(" ");
+  const typeFieldProps = {
+    ...(typeInvalid ? { "aria-invalid": true } : {}),
+    ...(typeDescribedBy ? { "aria-describedby": typeDescribedBy } : {}),
+  } as const;
   const dateFieldProps = datesInvalid ? invalidProps : {};
   const noLeaveTypes = leaveTypes.isSuccess && leaveTypes.data.length === 0;
 
@@ -234,6 +244,11 @@ export function NewRequestPage() {
                       </NativeSelectOption>
                     ))}
                   </NativeSelect>
+                  {typeHint ? (
+                    <p id={typeHintId} className="text-xs text-muted-foreground">
+                      {typeHint}
+                    </p>
+                  ) : null}
                 </div>
 
                 <div className="grid gap-4 sm:grid-cols-2">

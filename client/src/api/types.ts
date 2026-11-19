@@ -43,7 +43,10 @@ export interface LeaveType {
   id: string;
   code: string;
   name: string;
+  /** The type's CURRENT value; a request keeps its own copy (see LeaveRequest). */
   countsAgainstVacationBalance: boolean;
+  /** Most business days one request of this type may cover; null = no limit. */
+  maxBusinessDaysPerRequest: number | null;
 }
 
 export interface LeaveTypesResponse {
@@ -71,6 +74,12 @@ export interface LeaveRequest {
   decisionNote: string | null;
   /** Instant (ISO with time). */
   createdAt: string;
+  /**
+   * Whether THIS request counts against the vacation balance: a copy taken
+   * when it was created. Use it (not leaveType's) for anything about the
+   * request: HR may have edited the type since.
+   */
+  countsAgainstVacationBalance: boolean;
   leaveType: LeaveType;
   /** Computed by the API from its state machine. */
   permissions: { canCancel: boolean };
@@ -130,6 +139,8 @@ export interface PendingApproval {
   reason: string | null;
   /** Instant (ISO with time). */
   createdAt: string;
+  /** The request's own copy (see LeaveRequest). */
+  countsAgainstVacationBalance: boolean;
   leaveType: LeaveType;
   requester: Person;
   /** PENDING whose start date already arrived (it can still be decided). */
@@ -173,6 +184,7 @@ export type PreviewProblemCode =
   | "START_TOO_FAR"
   | "INVALID_LEAVE_TYPE"
   | "NO_BUSINESS_DAYS"
+  | "EXCEEDS_TYPE_LIMIT"
   | "OVERLAP"
   | "INSUFFICIENT_BALANCE";
 
@@ -194,3 +206,4 @@ export interface LeaveRequestPreview {
 export interface LeaveRequestPreviewResponse {
   preview: LeaveRequestPreview;
 }
+

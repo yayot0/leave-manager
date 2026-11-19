@@ -4,7 +4,7 @@ import { http, HttpResponse } from "msw/http";
 import type { LeaveRequestDetail } from "@/api/types";
 import { renderApp } from "@/test/render";
 import { mockDetail, mockSession, server } from "@/test/server";
-import { buildDetail, buildUser, EMPLOYEE_PERSON, MANAGER_PERSON } from "@/test/fixtures";
+import { buildDetail, buildUser, EMPLOYEE_PERSON, MANAGER_PERSON, VACATION_TYPE } from "@/test/fixtures";
 import { deferred } from "@/test/deferred";
 
 function mockDetailData(detail: LeaveRequestDetail) {
@@ -102,6 +102,23 @@ describe("RequestDetailPage", () => {
     // Approved first, then cancelled: the decider is still shown.
     expect(field("Aprobada por")).toContain("Luis Pérez");
     expect(screen.queryByRole("button", { name: /Cancelar/ })).not.toBeInTheDocument();
+  });
+
+  it("uses the request's own copy of 'descuenta', not the type's current value", async () => {
+    mockSession(buildUser("EMPLOYEE"));
+    // Created when Vacaciones counted; HR changed the type afterwards.
+    mockDetailData(
+      buildDetail({
+        countsAgainstVacationBalance: true,
+        leaveType: { ...VACATION_TYPE, countsAgainstVacationBalance: false },
+      }),
+    );
+    const { user } = renderApp("/solicitudes/req-1");
+
+    await screen.findByRole("heading", { level: 2, name: "Vacaciones" });
+    expect(field("Descuenta de tus vacaciones")).toBe("Sí");
+    await user.click(screen.getByRole("button", { name: /Cancelar solicitud/ }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("Los días que tenía apartados volverán a tu saldo.");
   });
 
   it("shows a not-found message for a 404 (hidden or nonexistent)", async () => {

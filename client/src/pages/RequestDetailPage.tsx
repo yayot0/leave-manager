@@ -216,7 +216,8 @@ function DetailContent({ request, refreshError, onRetry, isRetrying }: DetailCon
             <Field label="Al">{formatDate(request.endDate)}</Field>
             <Field label="Días hábiles">{request.businessDays}</Field>
             <Field label={isOwn ? "Descuenta de tus vacaciones" : "Descuenta de sus vacaciones"}>
-              {request.leaveType.countsAgainstVacationBalance ? "Sí" : "No"}
+              {/* The request's own copy, not the type's current value. */}
+              {request.countsAgainstVacationBalance ? "Sí" : "No"}
             </Field>
             <Field label="Motivo">{request.reason ?? <span className="text-muted-foreground">Sin motivo</span>}</Field>
             {/* A CANCELLED request with a decider was approved first, then cancelled. */}
