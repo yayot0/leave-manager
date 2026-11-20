@@ -13,6 +13,8 @@ export const ROUTES = {
   adminDepartments: "/administracion/departamentos",
   adminLeaveTypes: "/administracion/tipos-de-permiso",
   adminHolidays: "/administracion/festivos",
+  /** The only page a temporary-password session can open. */
+  account: "/mi-cuenta",
 } as const;
 
 export const HOME_ROUTE = ROUTES.balance;

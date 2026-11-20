@@ -65,7 +65,7 @@ describe("protected routes", () => {
       renderApp("/aprobaciones");
 
       expect(await screen.findByRole("heading", { level: 1, name: "No tienes acceso a esta sección" })).toBeInTheDocument();
-      expect(menuLinks()).toEqual(["Mi saldo", "Mis solicitudes", "Nueva solicitud"]);
+      expect(menuLinks()).toEqual(["Mi saldo", "Mis solicitudes", "Nueva solicitud", "Mi cuenta"]);
     });
 
     it("MANAGER also sees Aprobaciones but cannot open Administración", async () => {
@@ -73,7 +73,7 @@ describe("protected routes", () => {
       renderApp("/administracion");
 
       expect(await screen.findByRole("heading", { level: 1, name: "No tienes acceso a esta sección" })).toBeInTheDocument();
-      expect(menuLinks()).toEqual(["Mi saldo", "Mis solicitudes", "Nueva solicitud", "Aprobaciones"]);
+      expect(menuLinks()).toEqual(["Mi saldo", "Mis solicitudes", "Nueva solicitud", "Aprobaciones", "Mi cuenta"]);
     });
 
     it("HR sees every section", async () => {
@@ -81,7 +81,7 @@ describe("protected routes", () => {
       renderApp("/administracion");
 
       expect(await screen.findByRole("heading", { level: 1, name: "Administración" })).toBeInTheDocument();
-      expect(menuLinks()).toEqual(["Mi saldo", "Mis solicitudes", "Nueva solicitud", "Aprobaciones", "Administración"]);
+      expect(menuLinks()).toEqual(["Mi saldo", "Mis solicitudes", "Nueva solicitud", "Aprobaciones", "Administración", "Mi cuenta"]);
     });
 
     it("MANAGER cannot open the administration sub-pages, and the API is never called", async () => {

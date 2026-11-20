@@ -139,6 +139,9 @@ export function AppLayout() {
   }, [location.pathname]);
 
   const fullName = `${user.firstName} ${user.lastName}`;
+  // Temporary password: no menu (and no pending-approvals count, which the
+  // API would answer with 403). Only "Mi cuenta" and "Cerrar sesión".
+  const showMenu = !user.mustChangePassword;
 
   const userSummary = (
     <div className="min-w-0 text-sm">
@@ -165,46 +168,51 @@ export function AppLayout() {
 
       <header className="sticky top-0 z-40 border-b bg-background">
         <div className="flex h-14 items-center gap-3 px-4 md:px-6">
-          <Sheet open={mobileMenuOpen} onOpenChange={handleMobileMenuOpenChange}>
-            <SheetTrigger
-              render={<Button variant="ghost" size="icon" className="md:hidden" aria-label="Abrir menú" />}
-            >
-              <Menu aria-hidden="true" />
-            </SheetTrigger>
-            <SheetContent
-              side="left"
-              className="w-72"
-              finalFocus={mobileMenuFinalFocus}
-            >
-              <SheetHeader>
-                <SheetTitle>{APP_NAME}</SheetTitle>
-              </SheetHeader>
-              <div className="flex flex-1 flex-col gap-6 px-4 pb-4">
-                <MainNav role={user.role} onNavigate={handleMobileNavigate} />
-                <div className="mt-auto space-y-3 border-t pt-4">
-                  {userSummary}
-                  {logoutButton}
+          {showMenu ? (
+            <Sheet open={mobileMenuOpen} onOpenChange={handleMobileMenuOpenChange}>
+              <SheetTrigger
+                render={<Button variant="ghost" size="icon" className="md:hidden" aria-label="Abrir menú" />}
+              >
+                <Menu aria-hidden="true" />
+              </SheetTrigger>
+              <SheetContent
+                side="left"
+                className="w-72"
+                finalFocus={mobileMenuFinalFocus}
+              >
+                <SheetHeader>
+                  <SheetTitle>{APP_NAME}</SheetTitle>
+                </SheetHeader>
+                <div className="flex flex-1 flex-col gap-6 px-4 pb-4">
+                  <MainNav role={user.role} onNavigate={handleMobileNavigate} />
+                  <div className="mt-auto space-y-3 border-t pt-4">
+                    {userSummary}
+                    {logoutButton}
+                  </div>
                 </div>
-              </div>
-            </SheetContent>
-          </Sheet>
+              </SheetContent>
+            </Sheet>
+          ) : null}
 
           <div className="flex items-center gap-2 font-semibold">
             <CalendarDays className="size-5" aria-hidden="true" />
             <span>{APP_NAME}</span>
           </div>
 
-          <div className="ml-auto hidden items-center gap-4 md:flex">
-            <div className="text-right">{userSummary}</div>
+          {/* Without the mobile menu, logout stays in the header at every width. */}
+          <div className={cn("ml-auto items-center gap-4", showMenu ? "hidden md:flex" : "flex")}>
+            <div className="hidden text-right sm:block">{userSummary}</div>
             {logoutButton}
           </div>
         </div>
       </header>
 
       <div className="mx-auto flex max-w-6xl">
-        <aside className="hidden w-60 shrink-0 border-r bg-background p-4 md:block md:min-h-[calc(100dvh-3.5rem)]">
-          <MainNav role={user.role} />
-        </aside>
+        {showMenu ? (
+          <aside className="hidden w-60 shrink-0 border-r bg-background p-4 md:block md:min-h-[calc(100dvh-3.5rem)]">
+            <MainNav role={user.role} />
+          </aside>
+        ) : null}
 
         <main id="main" ref={mainRef} tabIndex={-1} className="min-w-0 flex-1 p-4 focus:outline-none md:p-8">
           {logout.isError ? (

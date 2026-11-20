@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import { matchPath } from "react-router";
-import { CalendarPlus, ClipboardCheck, FileText, Settings, Wallet, type LucideIcon } from "lucide-react";
+import { CalendarPlus, ClipboardCheck, FileText, Settings, UserRound, Wallet, type LucideIcon } from "lucide-react";
 import type { Role } from "@/api/types";
 import { BalancePage } from "@/pages/BalancePage";
 import { MyRequestsPage } from "@/pages/MyRequestsPage";
@@ -11,6 +11,7 @@ import { RequestDetailPage } from "@/pages/RequestDetailPage";
 import { DepartmentsPage } from "@/pages/admin/DepartmentsPage";
 import { LeaveTypesPage } from "@/pages/admin/LeaveTypesPage";
 import { HolidaysPage } from "@/pages/admin/HolidaysPage";
+import { AccountPage } from "@/pages/AccountPage";
 
 import { HOME_ROUTE, requestDetailPath, ROUTES } from "./paths";
 
@@ -80,6 +81,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
     Component: HolidaysPage,
     showInMenu: false,
   },
+  { to: ROUTES.account, label: "Mi cuenta", icon: UserRound, roles: ALL_ROLES, Component: AccountPage },
 ];
 
 export function navItemsFor(role: Role): NavItem[] {

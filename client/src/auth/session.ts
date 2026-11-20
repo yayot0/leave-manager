@@ -1,5 +1,5 @@
 import { hashKey, useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { getMe, login, logout } from "@/api/auth";
+import { changePassword, getMe, login, logout } from "@/api/auth";
 import type { User } from "@/api/types";
 
 export const sessionQueryKey = ["auth", "me"] as const;
@@ -63,6 +63,63 @@ export function useLogin() {
     // Drops anything cached from a previous session before storing the new user.
     onSuccess: (user) => setSession(queryClient, user),
   });
+}
+
+/**
+ * Changes the user's own password. Same user afterwards, so the cache is
+ * kept and only the session is replaced (with mustChangePassword false, a
+ * temporary-password session opens the rest of the app). `gcTime: 0`
+ * drops the mutation, which holds both passwords in its variables, as soon
+ * as the page resets it or unmounts.
+ */
+export function useChangePassword() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: changePassword,
+    gcTime: 0,
+    onSuccess: (user) => replaceSessionUser(queryClient, user),
+  });
+}
+
+/**
+ * Stores the user the API just returned. Same id: only the session changes
+ * (the cache is that user's). Another id or no user (e.g. another tab logged
+ * in with a different account, which replaces the shared cookie): it is a
+ * change of user, so everything cached is dropped, like on login.
+ */
+function replaceSessionUser(
+  queryClient: QueryClient,
+  user: User | null,
+  previous = queryClient.getQueryData<User | null>(sessionQueryKey),
+): void {
+  if (user && previous && user.id === previous.id) {
+    queryClient.setQueryData(sessionQueryKey, user);
+  } else {
+    setSession(queryClient, user);
+  }
+}
+
+/**
+ * The API answered 403 PASSWORD_CHANGE_REQUIRED: this session belongs to a
+ * temporary-password account. That happens when another tab logs in with
+ * such an account (the cookie is shared), so it is usually ANOTHER user.
+ * Re-reads /auth/me and stores it with replaceSessionUser; ProtectedRoute
+ * then shows "Mi cuenta". Several 403 at once share one /me request
+ * (fetchQuery reuses the one in flight).
+ */
+export async function refreshSessionAfterPasswordChangeRequired(queryClient: QueryClient): Promise<void> {
+  // Read before fetching: fetchQuery itself writes the new user into the cache.
+  const previous = queryClient.getQueryData<User | null>(sessionQueryKey);
+  try {
+    const user = await queryClient.fetchQuery({
+      queryKey: sessionQueryKey,
+      queryFn: ({ signal }) => getMe(signal),
+      staleTime: 0,
+    });
+    replaceSessionUser(queryClient, user, previous);
+  } catch {
+    // Network error: keep the current state; the next request will tell.
+  }
 }
 
 export function useLogout() {

@@ -5,7 +5,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { endedByDeliberateLogout, useSession } from "@/auth/session";
 import { CurrentUserContext, useCurrentUser } from "@/auth/current-user";
 import { FullPageError, FullPageLoading } from "@/components/FullPageStatus";
-import { ROUTES } from "@/app/navigation";
+import { normalizePath, ROUTES } from "@/app/navigation";
 import { ForbiddenPage } from "@/pages/ForbiddenPage";
 import { redirectTarget, type LoginLocationState } from "./redirect-target";
 
@@ -41,6 +41,12 @@ export function ProtectedRoute() {
     return <Navigate to={ROUTES.login} replace state={state} />;
   }
 
+  // Temporary password: "Mi cuenta" is the only page, whatever the URL. This
+  // is UX: the API answers 403 PASSWORD_CHANGE_REQUIRED to everything else.
+  if (session.data.mustChangePassword && normalizePath(location.pathname) !== ROUTES.account) {
+    return <Navigate to={ROUTES.account} replace />;
+  }
+
   return (
     <CurrentUserContext value={session.data}>
       <Outlet />
@@ -64,7 +70,11 @@ export function PublicOnlyRoute({ children }: { children: ReactNode }) {
   // If /me fails (e.g. API down), still show the login form: logging in will
   // report the connection problem.
   if (session.data) {
-    return <Navigate to={redirectTarget(location.state, session.data.role)} replace />;
+    // A temporary password goes straight to "Mi cuenta", ignoring `from`.
+    const target = session.data.mustChangePassword
+      ? ROUTES.account
+      : redirectTarget(location.state, session.data.role);
+    return <Navigate to={target} replace />;
   }
 
   return children;
