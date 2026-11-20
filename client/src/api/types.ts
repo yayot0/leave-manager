@@ -43,7 +43,10 @@ export interface LeaveType {
   id: string;
   code: string;
   name: string;
+  /** The type's CURRENT value; a request keeps its own copy (see LeaveRequest). */
   countsAgainstVacationBalance: boolean;
+  /** Most business days one request of this type may cover; null = no limit. */
+  maxBusinessDaysPerRequest: number | null;
 }
 
 export interface LeaveTypesResponse {
@@ -71,6 +74,12 @@ export interface LeaveRequest {
   decisionNote: string | null;
   /** Instant (ISO with time). */
   createdAt: string;
+  /**
+   * Whether THIS request counts against the vacation balance: a copy taken
+   * when it was created. Use it (not leaveType's) for anything about the
+   * request: HR may have edited the type since.
+   */
+  countsAgainstVacationBalance: boolean;
   leaveType: LeaveType;
   /** Computed by the API from its state machine. */
   permissions: { canCancel: boolean };
@@ -130,6 +139,8 @@ export interface PendingApproval {
   reason: string | null;
   /** Instant (ISO with time). */
   createdAt: string;
+  /** The request's own copy (see LeaveRequest). */
+  countsAgainstVacationBalance: boolean;
   leaveType: LeaveType;
   requester: Person;
   /** PENDING whose start date already arrived (it can still be decided). */
@@ -173,6 +184,7 @@ export type PreviewProblemCode =
   | "START_TOO_FAR"
   | "INVALID_LEAVE_TYPE"
   | "NO_BUSINESS_DAYS"
+  | "EXCEEDS_TYPE_LIMIT"
   | "OVERLAP"
   | "INSUFFICIENT_BALANCE";
 
@@ -193,4 +205,87 @@ export interface LeaveRequestPreview {
 
 export interface LeaveRequestPreviewResponse {
   preview: LeaveRequestPreview;
+}
+
+// ---------- HR catalogs (GET/POST/PATCH/DELETE /hr/...) ----------
+
+/** Reasons of the HR catalog 409s, in ApiError.code. */
+export type HrErrorCode =
+  | "DUPLICATE_NAME"
+  | "DUPLICATE_CODE"
+  | "DUPLICATE_DATE"
+  | "DEPARTMENT_HAS_EMPLOYEES"
+  /** Someone saved it after it was loaded (expectedUpdatedAt differs). */
+  | "STALE_DATA"
+  /** A type that counts against vacations cannot cap requests below 12 days (Art. 78 LFT). */
+  | "LIMIT_BELOW_LFT_MINIMUM";
+
+export interface Department {
+  id: string;
+  name: string;
+  /** Active and inactive employees: either one blocks deleting it. */
+  employeeCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DepartmentsResponse {
+  departments: Department[];
+}
+
+export interface DepartmentResponse {
+  department: Department;
+}
+
+/** A leave type as HR sees it: inactive ones included. */
+export interface HrLeaveType extends LeaveType {
+  isActive: boolean;
+  /** Requests of this type (any status). */
+  requestCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HrLeaveTypesResponse {
+  leaveTypes: HrLeaveType[];
+}
+
+export interface HrLeaveTypeResponse {
+  leaveType: HrLeaveType;
+}
+
+export interface Holiday {
+  id: string;
+  /** "YYYY-MM-DD" */
+  date: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface HolidaysResponse {
+  holidays: Holiday[];
+}
+
+/**
+ * Active requests (PENDING/APPROVED) crossing a date: they are not
+ * recalculated when a holiday is added or removed there. All zeros on a
+ * weekend, which never counted as a business day. The breakdown is what HR
+ * uses to decide on balance adjustments (by each request's own copy of
+ * "descuenta", and whether it already ended).
+ */
+export interface HolidayImpact {
+  affectedRequests: number;
+  breakdown: {
+    countingBalance: number;
+    notCountingBalance: number;
+    /** Already over (ended before today). */
+    past: number;
+    /** Running or in the future. */
+    upcoming: number;
+  };
+}
+
+export interface CreatedHolidayResponse extends HolidayImpact {
+  holiday: Holiday;
 }

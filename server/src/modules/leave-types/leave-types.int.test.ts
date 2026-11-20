@@ -52,6 +52,7 @@ describe("GET /api/leave-types", () => {
       code: "BRV",
       name: "Bereavement",
       countsAgainstVacationBalance: false,
+      maxBusinessDaysPerRequest: null,
     });
   });
 
@@ -60,7 +61,7 @@ describe("GET /api/leave-types", () => {
     await createLeaveType({ code: "VAC", name: "Vacaciones" });
     const res = await request(app).get("/api/leave-types").set("Cookie", await authCookie(user.id));
     expect(Object.keys(res.body.leaveTypes[0]).sort()).toEqual(
-      ["code", "countsAgainstVacationBalance", "id", "name"],
+      ["code", "countsAgainstVacationBalance", "id", "maxBusinessDaysPerRequest", "name"],
     );
   });
 

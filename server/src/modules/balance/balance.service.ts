@@ -23,23 +23,10 @@ export async function getVacationBalance(
   });
   const leaveRequests = await db.leaveRequest.findMany({
     where: { requesterId: user.id, status: { in: ["PENDING", "APPROVED"] } },
-    select: {
-      startDate: true,
-      businessDays: true,
-      status: true,
-      leaveType: { select: { countsAgainstVacationBalance: true } },
-    },
+    // The request's own copy, taken when it was created: editing the leave
+    // type later never changes this (or any past) balance.
+    select: { startDate: true, businessDays: true, status: true, countsAgainstVacationBalance: true },
   });
 
-  return calculateVacationBalance({
-    hireDate: user.hireDate,
-    asOf,
-    adjustments,
-    leaveRequests: leaveRequests.map((request) => ({
-      startDate: request.startDate,
-      businessDays: request.businessDays,
-      status: request.status,
-      countsAgainstVacationBalance: request.leaveType.countsAgainstVacationBalance,
-    })),
-  });
+  return calculateVacationBalance({ hireDate: user.hireDate, asOf, adjustments, leaveRequests });
 }

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { useLogout } from "@/auth/session";
 import { useCurrentUser } from "@/auth/current-user";
-import { canAccess, navItemsFor, ROLE_LABELS, ROUTES } from "@/app/navigation";
+import { canAccess, navItemsFor, normalizePath, ROLE_LABELS, ROUTES } from "@/app/navigation";
 import { usePendingApprovals } from "@/hooks/leave-requests";
 import type { Role } from "@/api/types";
 import { APP_NAME } from "@/components/PageHeading";
@@ -51,6 +51,7 @@ function PendingCount({ count, isActive }: { count: number; isActive: boolean })
 
 /** Menu of the sections the role can open (same list as the routes). */
 function MainNav({ role, onNavigate }: MainNavProps) {
+  const { pathname } = useLocation();
   // Same query (and cache) as the Aprobaciones page; roles that cannot open
   // that page never call the endpoint.
   const pendingApprovals = usePendingApprovals({ enabled: canAccess(ROUTES.approvals, role) });
@@ -59,11 +60,15 @@ function MainNav({ role, onNavigate }: MainNavProps) {
   return (
     <nav aria-label="Principal">
       <ul className="space-y-1">
-        {navItemsFor(role).map(({ to, label, icon: Icon }) => (
+        {navItemsFor(role).map(({ to, label, icon: Icon, matchNested }) => (
           <li key={to}>
             <NavLink
               to={to}
-              end
+              end={!matchNested}
+              // On a sub-page ("/administracion/festivos") the section is
+              // highlighted but it is not THE current page: the sub-menu marks
+              // that one with "page", so only one element says so.
+              aria-current={matchNested && normalizePath(pathname) !== to ? "true" : "page"}
               onClick={() => onNavigate?.(to)}
               className={({ isActive }) =>
                 cn(

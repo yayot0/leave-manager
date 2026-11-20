@@ -38,8 +38,25 @@ enum BalanceAdjustmentType {
   CARRYOVER
 }
 
+/// What an HR audit entry is about. RH-B will add EMPLOYEE and BALANCE_ADJUSTMENT.
+enum HrAuditEntity {
+  DEPARTMENT
+  LEAVE_TYPE
+  HOLIDAY
+}
+
+enum HrAuditAction {
+  CREATED
+  UPDATED
+  DEACTIVATED
+  REACTIVATED
+  DELETED
+}
+
 // ---------- Models ----------
 
+// Added by hand in migration leave_type_limits_and_department_restrict:
+// uq_departments_name_lower (unique ignoring case) and chk_departments_name_trimmed.
 model Department {
   id   String @id @default(cuid())
   name String @unique
@@ -63,7 +80,9 @@ model User {
   isActive     Boolean  @default(true) @map("is_active")
 
   departmentId String?     @map("department_id")
-  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  // Restrict: a department with employees (active or not) cannot be deleted;
+  // the API answers 409 first, this is the second line of defense.
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: Restrict)
 
   managerId     String? @map("manager_id")
   manager       User?   @relation("UserManager", fields: [managerId], references: [id], onDelete: SetNull)
@@ -74,6 +93,7 @@ model User {
   requestEvents      RequestEvent[]      @relation("ActorEvents")
   balanceAdjustments BalanceAdjustment[] @relation("UserAdjustments")
   grantedAdjustments BalanceAdjustment[] @relation("GrantedByAdjustments")
+  hrAuditLogs        HrAuditLog[]        @relation("HrAuditActor")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -84,12 +104,18 @@ model User {
   @@map("users")
 }
 
+// Added by hand in migration leave_type_limits_and_department_restrict:
+// uq_leave_types_name_lower (unique ignoring case), chk_leave_types_name_trimmed
+// and chk_leave_types_code_format (uppercase identifier).
 model LeaveType {
   id                           String  @id @default(cuid())
   name                         String  @unique
   code                         String  @unique
   countsAgainstVacationBalance Boolean @default(true) @map("counts_against_vacation_balance")
   isActive                     Boolean @default(true) @map("is_active")
+  // Most business days one request of this type may cover; null = no limit.
+  // CHECK chk_leave_types_max_business_days_range (added by hand) keeps it in 1..366.
+  maxBusinessDaysPerRequest    Int?    @map("max_business_days_per_request")
 
   leaveRequests      LeaveRequest[]
   balanceAdjustments BalanceAdjustment[]
@@ -108,6 +134,11 @@ model LeaveRequest {
 
   leaveTypeId String    @map("leave_type_id")
   leaveType   LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+
+  // Copy of leaveType.countsAgainstVacationBalance taken when the request was
+  // created. Balances read this copy, so editing a leave type never changes
+  // past balances. No default on purpose: the code must always set it.
+  countsAgainstVacationBalance Boolean @map("counts_against_vacation_balance")
 
   startDate    DateTime @map("start_date") @db.Date
   endDate      DateTime @map("end_date") @db.Date
@@ -151,7 +182,7 @@ model RequestEvent {
   actor   User?   @relation("ActorEvents", fields: [actorId], references: [id], onDelete: Restrict)
 
   action RequestEventAction
-  note   String? @db.Text
+  note   String?            @db.Text
 
   createdAt DateTime @default(now()) @map("created_at")
 
@@ -160,6 +191,7 @@ model RequestEvent {
   @@map("request_events")
 }
 
+// CHECK chk_holidays_name_trimmed added by hand (migration leave_type_limits_and_department_restrict).
 model Holiday {
   id   String   @id @default(cuid())
   date DateTime @unique @db.Date
@@ -195,4 +227,35 @@ model BalanceAdjustment {
   @@index([leaveTypeId])
   @@index([grantedById])
   @@map("balance_adjustments")
+}
+
+/// Append-only log of every change HR makes to the catalogs (and, from RH-B,
+/// to employees and balances). Written in the same transaction as the change.
+/// Never edited or deleted. Added by hand in migration hr_audit_log:
+/// trg_hr_audit_logs_append_only (rejects UPDATE/DELETE), trg_hr_audit_logs_no_truncate
+/// (rejects TRUNCATE unless the transaction sets app.allow_audit_truncate),
+/// chk_hr_audit_logs_snapshots_match_action (before/after match the action) and
+/// chk_hr_audit_logs_snapshots_are_objects (snapshots are JSON objects).
+model HrAuditLog {
+  id String @id @default(cuid())
+
+  actorId String @map("actor_id")
+  actor   User   @relation("HrAuditActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  entityType HrAuditEntity @map("entity_type")
+  /// No foreign key on purpose: the entity may be deleted (e.g. a department).
+  entityId   String        @map("entity_id")
+  action     HrAuditAction
+
+  /// Whitelisted snapshot of the entity before / after the change (ISO dates,
+  /// never secrets). NULL before CREATED and after DELETED.
+  before Json?
+  after  Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([entityType, entityId, createdAt])
+  @@index([actorId])
+  @@index([createdAt])
+  @@map("hr_audit_logs")
 }

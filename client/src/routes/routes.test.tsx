@@ -84,6 +84,40 @@ describe("protected routes", () => {
       expect(menuLinks()).toEqual(["Mi saldo", "Mis solicitudes", "Nueva solicitud", "Aprobaciones", "Administración"]);
     });
 
+    it("MANAGER cannot open the administration sub-pages, and the API is never called", async () => {
+      mockSession(buildUser("MANAGER"));
+      let hrCalls = 0;
+      server.use(
+        http.get("/api/hr/*", () => {
+          hrCalls++;
+          return HttpResponse.json({ error: "No autorizado" }, { status: 403 });
+        }),
+      );
+      renderApp("/administracion/festivos");
+
+      expect(await screen.findByRole("heading", { level: 1, name: "No tienes acceso a esta sección" })).toBeInTheDocument();
+      expect(hrCalls).toBe(0);
+    });
+
+    it("HR opens an administration sub-page with Administración still marked in the menu", async () => {
+      mockSession(buildUser("HR"));
+      renderApp("/administracion/departamentos");
+
+      expect(await screen.findByRole("heading", { level: 1, name: "Departamentos" })).toBeInTheDocument();
+      const nav = screen.getByRole("navigation", { name: "Principal" });
+      // Highlighted as the current section, but only the sub-menu says "page" (one current page).
+      expect(within(nav).getByRole("link", { name: "Administración" })).toHaveAttribute("aria-current", "true");
+      const subnav = screen.getByRole("navigation", { name: "Secciones de administración" });
+      expect(within(subnav).getByRole("link", { name: "Departamentos" })).toHaveAttribute("aria-current", "page");
+    });
+
+    it("an unknown administration sub-path is not found for HR (default deny)", async () => {
+      mockSession(buildUser("HR"));
+      renderApp("/administracion/otra");
+
+      expect(await screen.findByRole("heading", { level: 1, name: "Página no encontrada" })).toBeInTheDocument();
+    });
+
     it("marks the current section in the menu", async () => {
       mockSession(buildUser("EMPLOYEE"));
       renderApp("/solicitudes");

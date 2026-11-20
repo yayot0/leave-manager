@@ -4,6 +4,7 @@ import {
   formatDateRange,
   formatDateTime,
   formatShortDate,
+  formatWeekday,
   nextDateOnly,
   parseDateOnly,
   todayISO,
@@ -68,6 +69,14 @@ describe("formatShortDate and formatDateRange", () => {
   it("joins two different days and collapses a single day", () => {
     expect(formatDateRange("2026-12-01", "2026-12-03")).toBe("1 de diciembre de 2026 al 3 de diciembre de 2026");
     expect(formatDateRange("2026-12-01", "2026-12-01")).toBe("1 de diciembre de 2026");
+  });
+});
+
+describe("formatWeekday", () => {
+  it("gives the weekday of the date itself, not the day before in Monterrey", () => {
+    // 2026-03-01 is a Sunday; new Date("2026-03-01") + local getDay() would say Saturday (UTC-6).
+    expect(formatWeekday("2026-03-01")).toBe("domingo");
+    expect(formatWeekday("2026-11-16")).toBe("lunes");
   });
 });
 

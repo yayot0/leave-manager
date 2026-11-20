@@ -25,7 +25,7 @@ const NOTE_MAX_LENGTH = 500;
 
 type CancellableRequest = Pick<
   LeaveRequest | LeaveRequestDetail,
-  "id" | "status" | "startDate" | "endDate" | "businessDays" | "leaveType"
+  "id" | "status" | "startDate" | "endDate" | "businessDays" | "leaveType" | "countsAgainstVacationBalance"
 >;
 
 interface CancelRequestDialogProps {
@@ -76,7 +76,8 @@ export function CancelRequestDialog({ request, canCancel, size = "default" }: Ca
   const noteHintId = useId();
 
   const range = formatDateRange(request.startDate, request.endDate, formatShortDate);
-  const returnsDays = request.leaveType.countsAgainstVacationBalance;
+  // The request's own copy: HR may have changed the type since it was created.
+  const returnsDays = request.countsAgainstVacationBalance;
 
   const handleConfirm = () => {
     if (locked) {

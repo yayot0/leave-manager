@@ -10,6 +10,9 @@ export const ROUTES = {
   requestDetail: "/solicitudes/:id",
   approvals: "/aprobaciones",
   admin: "/administracion",
+  adminDepartments: "/administracion/departamentos",
+  adminLeaveTypes: "/administracion/tipos-de-permiso",
+  adminHolidays: "/administracion/festivos",
 } as const;
 
 export const HOME_ROUTE = ROUTES.balance;

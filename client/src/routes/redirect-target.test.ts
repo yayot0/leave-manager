@@ -61,8 +61,20 @@ describe("canAccess", () => {
 
   it("denies paths that are not a known section", () => {
     expect(canAccess("/", "HR")).toBe(false);
-    expect(canAccess("/administracion/festivos", "HR")).toBe(false);
+    // A sub-path of a known section is still unknown: denied.
+    expect(canAccess("/administracion/otra", "HR")).toBe(false);
+    expect(canAccess("/administracion/festivos/2026", "HR")).toBe(false);
     expect(canAccess("/no-existe", "HR")).toBe(false);
+  });
+
+  it("opens the administration sub-pages only to HR", () => {
+    for (const path of ["/administracion/departamentos", "/administracion/tipos-de-permiso", "/administracion/festivos"]) {
+      expect(canAccess(path, "HR")).toBe(true);
+      expect(canAccess(path, "MANAGER")).toBe(false);
+      expect(canAccess(path, "EMPLOYEE")).toBe(false);
+    }
+    // Same normalization as the router: case and trailing slash.
+    expect(canAccess("/Administracion/Festivos/", "HR")).toBe(true);
   });
 
   it("matches the detail route by pattern, one segment per id", () => {

@@ -31,6 +31,7 @@ async function insert(
     data: {
       requesterId: f.requester.id,
       leaveTypeId: f.type.id,
+      countsAgainstVacationBalance: f.type.countsAgainstVacationBalance,
       startDate: d("2026-11-16"),
       endDate: d("2026-11-20"),
       businessDays: 5,

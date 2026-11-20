@@ -30,6 +30,16 @@ export const handlers = [
   http.get("/api/leave-types", () => HttpResponse.json({ leaveTypes: [VACATION_TYPE, PERSONAL_TYPE] })),
   http.get("/api/leave-requests/mine", () => HttpResponse.json({ leaveRequests: [] })),
   http.get("/api/leave-requests/pending-approvals", () => HttpResponse.json({ leaveRequests: [] })),
+  // HR catalogs: empty by default.
+  http.get("/api/hr/departments", () => HttpResponse.json({ departments: [] })),
+  http.get("/api/hr/leave-types", () => HttpResponse.json({ leaveTypes: [] })),
+  http.get("/api/hr/holidays", () => HttpResponse.json({ holidays: [] })),
+  http.get("/api/hr/holidays/impact", () =>
+    HttpResponse.json({
+      affectedRequests: 0,
+      breakdown: { countingBalance: 0, notCountingBalance: 0, past: 0, upcoming: 0 },
+    }),
+  ),
   http.get("/api/leave-requests/preview", () => HttpResponse.json({ preview: buildPreview() })),
 ];
 

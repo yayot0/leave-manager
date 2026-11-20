@@ -61,11 +61,14 @@ const DEPARTMENTS = [
   "Finanzas",
 ] as const;
 
+// maxBusinessDaysPerRequest is company policy (the LFT does not regulate these
+// permissions). Vacaciones has no limit: the balance already bounds it, and
+// Art. 78 LFT lets the worker ask for at least 12 continuous days.
 const LEAVE_TYPES = [
-  { code: "VAC", name: "Vacaciones", countsAgainstVacationBalance: true },
-  { code: "PERM_GOCE", name: "Permiso con goce de sueldo", countsAgainstVacationBalance: false },
-  { code: "PERM_SIN_GOCE", name: "Permiso sin goce de sueldo", countsAgainstVacationBalance: false },
-  { code: "PERSONAL", name: "Día personal", countsAgainstVacationBalance: false },
+  { code: "VAC", name: "Vacaciones", countsAgainstVacationBalance: true, maxBusinessDaysPerRequest: null },
+  { code: "PERM_GOCE", name: "Permiso con goce de sueldo", countsAgainstVacationBalance: false, maxBusinessDaysPerRequest: 5 },
+  { code: "PERM_SIN_GOCE", name: "Permiso sin goce de sueldo", countsAgainstVacationBalance: false, maxBusinessDaysPerRequest: 10 },
+  { code: "PERSONAL", name: "Día personal", countsAgainstVacationBalance: false, maxBusinessDaysPerRequest: 1 },
 ] as const;
 
 // ---------- Personas de Grupo Norte ----------
@@ -123,6 +126,12 @@ const USERS: UserSeed[] = [
 
 async function main() {
   // 1. Limpieza (hijo -> padre) para que el seed sea repetible sin duplicados.
+  // The audit log is append-only: its triggers reject DELETE and TRUNCATE.
+  // The dev seed opts in to TRUNCATE for this transaction only.
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT set_config('app.allow_audit_truncate', 'on', true)`;
+    await tx.$executeRaw`TRUNCATE "hr_audit_logs"`;
+  });
   await prisma.requestEvent.deleteMany();
   await prisma.balanceAdjustment.deleteMany();
   await prisma.leaveRequest.deleteMany();
@@ -139,16 +148,20 @@ async function main() {
   }
 
   // 3. Tipos de permiso.
-  const leaveTypesByCode = new Map<string, string>();
+  const leaveTypesByCode = new Map<string, { id: string; countsAgainstVacationBalance: boolean }>();
   for (const lt of LEAVE_TYPES) {
     const created = await prisma.leaveType.create({
       data: {
         code: lt.code,
         name: lt.name,
         countsAgainstVacationBalance: lt.countsAgainstVacationBalance,
+        maxBusinessDaysPerRequest: lt.maxBusinessDaysPerRequest,
       },
     });
-    leaveTypesByCode.set(lt.code, created.id);
+    leaveTypesByCode.set(lt.code, {
+      id: created.id,
+      countsAgainstVacationBalance: created.countsAgainstVacationBalance,
+    });
   }
 
   // 4. Festivos 2026-2027.
@@ -210,10 +223,13 @@ async function main() {
     lastUpdateAt: string;
   }) {
     const businessDays = countBusinessDays(d(opts.start), d(opts.end), HOLIDAY_DATES);
+    const leaveType = leaveTypesByCode.get(opts.leaveType)!;
     const request = await prisma.leaveRequest.create({
       data: {
         requesterId: userId(opts.requester),
-        leaveTypeId: leaveTypesByCode.get(opts.leaveType)!,
+        leaveTypeId: leaveType.id,
+        // Copy taken at creation, as the API does.
+        countsAgainstVacationBalance: leaveType.countsAgainstVacationBalance,
         startDate: d(opts.start),
         endDate: d(opts.end),
         businessDays,

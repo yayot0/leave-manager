@@ -18,6 +18,9 @@ export function d(iso: string): Date {
 }
 
 const APP_TABLES = [
+  // Append-only: its triggers reject UPDATE/DELETE, and TRUNCATE unless the
+  // transaction sets app.allow_audit_truncate (resetDb does).
+  "hr_audit_logs",
   "request_events",
   "balance_adjustments",
   "leave_requests",
@@ -36,7 +39,12 @@ export async function resetDb(): Promise<void> {
     throw new Error(`resetDb refused: connected to "${dbName}", not a *_test database.`);
   }
   const tables = APP_TABLES.map((t) => `"${t}"`).join(", ");
-  await prisma.$executeRawUnsafe(`TRUNCATE ${tables} RESTART IDENTITY CASCADE`);
+  await prisma.$transaction(async (tx) => {
+    // hr_audit_logs blocks TRUNCATE unless the transaction opts in; the
+    // setting is local to this transaction (third argument `true`).
+    await tx.$queryRaw`SELECT set_config('app.allow_audit_truncate', 'on', true)`;
+    await tx.$executeRawUnsafe(`TRUNCATE ${tables} RESTART IDENTITY CASCADE`);
+  });
 }
 
 let userCounter = 0;
@@ -67,7 +75,13 @@ export async function createUser(
 }
 
 export async function createLeaveType(
-  overrides: { code?: string; name?: string; countsAgainstVacationBalance?: boolean; isActive?: boolean } = {},
+  overrides: {
+    code?: string;
+    name?: string;
+    countsAgainstVacationBalance?: boolean;
+    isActive?: boolean;
+    maxBusinessDaysPerRequest?: number | null;
+  } = {},
 ) {
   const code = overrides.code ?? `T${++userCounter}`;
   return prisma.leaveType.create({
@@ -76,6 +90,7 @@ export async function createLeaveType(
       name: overrides.name ?? `Tipo ${code}`,
       countsAgainstVacationBalance: overrides.countsAgainstVacationBalance ?? true,
       isActive: overrides.isActive ?? true,
+      maxBusinessDaysPerRequest: overrides.maxBusinessDaysPerRequest ?? null,
     },
   });
 }
@@ -96,8 +111,18 @@ export async function createLeaveRequestRow(opts: {
   /** Who decided it. Only allowed for APPROVED, REJECTED or CANCELLED. */
   deciderId?: string;
   decidedAt?: Date;
+  /** The request's copy; defaults to its leave type's current value, as the API does. */
+  countsAgainstVacationBalance?: boolean;
 }) {
   const status = opts.status ?? "PENDING";
+  const countsAgainstVacationBalance =
+    opts.countsAgainstVacationBalance ??
+    (
+      await prisma.leaveType.findUniqueOrThrow({
+        where: { id: opts.leaveTypeId },
+        select: { countsAgainstVacationBalance: true },
+      })
+    ).countsAgainstVacationBalance;
   // chk_leave_requests_decision_matches_status: APPROVED/REJECTED need a
   // decider (different from the requester); invent one if the test did not
   // pass it, so every row this helper creates is valid for the database.
@@ -108,6 +133,7 @@ export async function createLeaveRequestRow(opts: {
     data: {
       requesterId: opts.requesterId,
       leaveTypeId: opts.leaveTypeId,
+      countsAgainstVacationBalance,
       startDate: d(opts.start),
       endDate: d(opts.end),
       businessDays: opts.businessDays,
