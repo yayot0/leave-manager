@@ -38,19 +38,24 @@ enum BalanceAdjustmentType {
   CARRYOVER
 }
 
-/// What an HR audit entry is about. RH-B will add EMPLOYEE and BALANCE_ADJUSTMENT.
+/// What an HR audit entry is about. EMPLOYEE added in RH-B1 (password resets);
+/// a later phase will add BALANCE_ADJUSTMENT.
 enum HrAuditEntity {
   DEPARTMENT
   LEAVE_TYPE
   HOLIDAY
+  EMPLOYEE
 }
 
+/// PASSWORD_RESET: HR gave an employee a temporary password. Its snapshots
+/// only hold mustChangePassword and passwordChangedAt, never the password.
 enum HrAuditAction {
   CREATED
   UPDATED
   DEACTIVATED
   REACTIVATED
   DELETED
+  PASSWORD_RESET
 }
 
 // ---------- Models ----------
@@ -78,6 +83,14 @@ model User {
   role         Role     @default(EMPLOYEE)
   hireDate     DateTime @map("hire_date") @db.Date
   isActive     Boolean  @default(true) @map("is_active")
+
+  /// true while the password is a temporary one set by HR: the API then only
+  /// allows GET /auth/me, POST /auth/change-password and logout (403 otherwise).
+  mustChangePassword Boolean  @default(false) @map("must_change_password")
+  /// Last time the password changed (own change or HR reset). Session tokens
+  /// carry this value and requireAuth rejects any token that does not match,
+  /// so changing the password ends every other session.
+  passwordChangedAt  DateTime @default(now()) @map("password_changed_at")
 
   departmentId String?     @map("department_id")
   // Restrict: a department with employees (active or not) cannot be deleted;
@@ -234,8 +247,11 @@ model BalanceAdjustment {
 /// Never edited or deleted. Added by hand in migration hr_audit_log:
 /// trg_hr_audit_logs_append_only (rejects UPDATE/DELETE), trg_hr_audit_logs_no_truncate
 /// (rejects TRUNCATE unless the transaction sets app.allow_audit_truncate),
-/// chk_hr_audit_logs_snapshots_match_action (before/after match the action) and
-/// chk_hr_audit_logs_snapshots_are_objects (snapshots are JSON objects).
+/// chk_hr_audit_logs_snapshots_match_action (before/after match the action;
+/// replaced in migration audit_password_reset_check so PASSWORD_RESET needs
+/// both sides), chk_hr_audit_logs_snapshots_are_objects (snapshots are JSON objects)
+/// and chk_hr_audit_logs_password_reset_shape (PASSWORD_RESET: EMPLOYEE entity,
+/// snapshots with exactly mustChangePassword and passwordChangedAt, after = temporary).
 model HrAuditLog {
   id String @id @default(cuid())
 
