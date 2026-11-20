@@ -150,8 +150,13 @@ export async function createAdjustment(userId: string, days: number, effectiveDa
   });
 }
 
-/** Cookie header value that authenticates as `userId`. */
+/**
+ * A session cookie for the user as it is now: the token carries the user's
+ * current passwordChangedAt, like one issued at login. For an id that does
+ * not exist it still signs a token (with 0), and requireAuth answers 401.
+ */
 export async function authCookie(userId: string): Promise<string> {
-  const token = await signAuthToken(userId);
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { passwordChangedAt: true } });
+  const token = await signAuthToken(userId, user?.passwordChangedAt ?? new Date(0));
   return `${AUTH_COOKIE_NAME}=${token}`;
 }

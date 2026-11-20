@@ -140,3 +140,56 @@ describe("isTransactionTimeout", () => {
     expect(isTransactionTimeout(value)).toBe(false);
   });
 });
+
+describe("errorHandler: logs without secrets", () => {
+  const SECRET_HASH = "$argon2id$v=19$m=19456,t=2,p=1$c2VjcmV0c2FsdA$secret-hash-value";
+  const SECRET_PASSWORD = "mi contraseña super secreta 123";
+
+  /** Everything console.error received, serialized (including nested objects). */
+  function logged(): string {
+    return consoleError.mock.calls.map((args) => JSON.stringify(args, (_key, value: unknown) => value)).join("\n");
+  }
+
+  it("logs a Prisma validation error without its message (which prints the query arguments)", async () => {
+    const err = new Prisma.PrismaClientValidationError(
+      `Invalid \`prisma.user.update()\` invocation:\n{ data: { passwordHash: "${SECRET_HASH}", password: "${SECRET_PASSWORD}" } }`,
+      { clientVersion: "x" },
+    );
+    const res = await request(appThrowing(err)).get("/boom");
+
+    expect(res.status).toBe(500);
+    expect(res.body).toEqual({ error: "Error interno del servidor" });
+    expect(consoleError).toHaveBeenCalledTimes(1);
+    const output = logged();
+    expect(output).toContain("PrismaClientValidationError");
+    expect(output).not.toContain(SECRET_HASH);
+    expect(output).not.toContain(SECRET_PASSWORD);
+    expect(output).not.toContain("passwordHash");
+    expect(output).not.toContain("Invalid");
+  });
+
+  it("logs name, code and stack frames only: never the message or other properties", async () => {
+    const err = Object.assign(new Error(`query failed with password=${SECRET_PASSWORD}`), {
+      code: "23505",
+      meta: { passwordHash: SECRET_HASH },
+      parameters: [SECRET_PASSWORD],
+    });
+    await request(appThrowing(err)).get("/boom");
+
+    const [label, entry] = consoleError.mock.calls[0] as [string, Record<string, unknown>];
+    expect(label).toBe("Unhandled error");
+    expect(Object.keys(entry).sort()).toEqual(["code", "name", "stack"]);
+    expect(entry.name).toBe("Error");
+    expect(entry.code).toBe("23505");
+    expect(entry.stack).toMatch(/^\s+at /);
+    const output = logged();
+    expect(output).not.toContain(SECRET_PASSWORD);
+    expect(output).not.toContain(SECRET_HASH);
+    expect(output).not.toContain("passwordHash");
+  });
+
+  it("logs only the type of a thrown non-Error value", async () => {
+    await request(appThrowing({ passwordHash: SECRET_HASH })).get("/boom");
+    expect(consoleError.mock.calls[0]).toEqual(["Unhandled error", { name: "object" }]);
+  });
+});

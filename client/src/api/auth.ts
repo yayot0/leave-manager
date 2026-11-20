@@ -16,6 +16,21 @@ export async function login(credentials: LoginCredentials): Promise<User> {
   return user;
 }
 
+export interface ChangePasswordInput {
+  currentPassword: string;
+  newPassword: string;
+}
+
+/**
+ * Changes the user's own password. The API answers with the updated user
+ * and a new session cookie; every other session of the user ends. A wrong
+ * current password is a 400 with code INVALID_CURRENT_PASSWORD (not a 401).
+ */
+export async function changePassword(input: ChangePasswordInput): Promise<User> {
+  const { user } = await apiFetch<UserResponse>("/auth/change-password", { method: "POST", body: input });
+  return user;
+}
+
 export async function logout(): Promise<void> {
   await apiFetch<unknown>("/auth/logout", { method: "POST" });
 }

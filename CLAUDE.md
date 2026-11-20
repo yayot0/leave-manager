@@ -165,6 +165,82 @@ Frontend (desde `client/`):
   `FOR NO KEY UPDATE`, para no frenar inserts que la referencian; `lockHoliday`).
 - Un cambio sin diferencias (mismo nombre, PATCH con los mismos valores) no escribe ni registra.
 
+## Cuentas y contraseñas (Fase RH-B1)
+- Política (`server/src/security/password-policy.ts`, NIST SP 800-63B rev. 4). Se aplica al ELEGIR
+  una contraseña, nunca en el login:
+  - de 15 a 128 caracteres (code points tras normalizar a NFKC);
+  - sin reglas de composición ni expiración; se aceptan espacios, Unicode y pegar;
+  - se rechazan las comunes o filtradas (`server/data/common-passwords.txt`, de SecLists, MIT) y
+    los patrones triviales (3 caracteres distintos o menos, secuencias);
+  - se rechazan los datos personales como PALABRA COMPLETA, nunca como subcadena. Así se separa:
+    - la contraseña, por todo lo que no sea letra ni número y en el cambio entre letras y dígitos
+      ("ana2026" tiene la palabra "ana"; "banana2026" tiene "banana"); minúsculas y sin acentos;
+    - la parte local del correo, por `.`, `-` y `_`, cada parte por separado y además todas
+      juntas ("juanperez");
+    - nombre y apellido, igual que la contraseña.
+    Solo cuentan las palabras de 3 letras o más ("Ana" sí; "de"/"la" de "De la Cruz" no). Con Ana,
+    "mi banana favorita" pasa y "ana come tacos" no. También cuentan el nombre del servicio y
+    "vacaciones".
+  - Codes: `PASSWORD_TOO_SHORT`, `PASSWORD_TOO_LONG`, `PASSWORD_TOO_COMMON`,
+    `PASSWORD_CONTAINS_PERSONAL_INFO` y `PASSWORD_UNCHANGED` (igual a la actual), todos 400.
+- `hashPassword`/`verifyPassword` normalizan a NFKC; las contraseñas ASCII no cambian.
+- Sesiones: el JWT lleva el claim `pca` = `users.password_changed_at` en ms, y `requireAuth`
+  rechaza (401) cualquier token cuyo `pca` no sea igual. Así cambiar o resetear la contraseña
+  cierra todas las demás sesiones.
+  - No se usa `iat` porque va en segundos.
+  - `nextPasswordChangedAt` garantiza que el valor siempre aumente, aunque haya dos cambios en
+    el mismo milisegundo.
+- Contraseña temporal (`users.must_change_password`). `requireAuth` responde 403
+  `PASSWORD_CHANGE_REQUIRED` POR DEFECTO, en cualquier ruta.
+  - Solo `requireAuthAllowingPasswordChange` lo deja pasar, y solo lo usan `GET /auth/me` y
+    `POST /auth/change-password`; `logout` no exige sesión.
+  - Una ruta nueva queda bloqueada sin tener que acordarse de nada. Nunca usar
+    `requireAuthAllowingPasswordChange` en otra ruta.
+- `POST /api/auth/change-password` `{ currentPassword, newPassword }` (`.strict()`). Orden:
+  1. La política (es barata y no da pistas sobre la actual).
+  2. La actual: si no coincide, 400 `INVALID_CURRENT_PASSWORD` (no 401, que cerraría la sesión
+     en el cliente).
+  3. El hash, fuera de la transacción.
+  4. `lockUser`; si el hash cambió mientras tanto, 409 `STALE_DATA`.
+  5. Se escribe `mustChangePassword=false`.
+  6. Se manda una cookie nueva y la sesión actual sigue.
+  - Dos rate limits por `req.user.id` (`server/src/modules/auth/rate-limits.ts`), ambos con 429
+    `TOO_MANY_ATTEMPTS` (igual que el login):
+    - 5 intentos fallidos cada 15 min; solo cuentan los `INVALID_CURRENT_PASSWORD`;
+    - 20 peticiones cada 15 min con cualquier respuesta, porque cada una puede costar un argon2
+      (p. ej. `PASSWORD_UNCHANGED`).
+    El reset de RH limpia ambos contadores del empleado (`resetChangePasswordLimits`), así un
+    bloqueo ganado con la contraseña anterior no le impide reemplazar la temporal nueva.
+  - No va a `hr_audit_logs`, porque no es una acción de RH.
+- `PublicUser` (`toPublicUser`, lo que devuelven login, `/auth/me` y `change-password`, y lo que
+  lleva `req.user`) es una LISTA BLANCA de campos: una columna nueva de `users` no sale hasta
+  agregarla ahí. Nunca `passwordHash`, y tampoco `passwordChangedAt`, que solo sirve para validar
+  el token. Todo `/api/auth` responde con `Cache-Control: no-store`.
+- Logs sin secretos: el `errorHandler` registra de un error inesperado solo `name`, `code` y los
+  marcos `at …` del stack (`safeErrorLog`). Nunca el mensaje ni otras propiedades, porque el mensaje
+  de un error de validación de Prisma imprime los argumentos de la consulta (`passwordHash` entre
+  ellos). Nunca registrar bodies de petición ni objetos de error completos.
+- `POST /api/hr/employees/:id/reset-password` (solo HR):
+  - genera la contraseña con `generateTemporaryPassword()` (`server/src/security/temporary-password.ts`;
+    la RH-B2 la usa al dar de alta);
+  - guarda solo el hash, marca `mustChangePassword` y cierra las sesiones del empleado;
+  - devuelve `{ temporaryPassword, user }` UNA vez, con `Cache-Control: no-store`.
+  - Errores: si es el propio HR, 403 `CANNOT_RESET_OWN_PASSWORD` (se usa Mi cuenta); si no existe,
+    404; si está inactivo, 409 `EMPLOYEE_INACTIVE`.
+  - Bitácora `EMPLOYEE`/`PASSWORD_RESET` con fotos de EXACTAMENTE `{ mustChangePassword,
+    passwordChangedAt }`. El CHECK `chk_hr_audit_logs_password_reset_shape` lo exige en la base.
+  - La contraseña nunca va a logs ni a la bitácora.
+- **Riesgo conocido: suplantación con el reset.** RH ve la contraseña temporal. Si resetea a otro
+  HR o a un MANAGER e inicia sesión antes que el dueño, puede aprobar, rechazar o administrar en su
+  nombre: los eventos de `request_events` (y `decider_id`) quedarían con el dueño como actor, no
+  con RH. La bitácora solo registra el reset, no lo que se hizo después.
+  - Lo mitiga que el dueño pierde sus sesiones y su contraseña deja de funcionar, así que se da
+    cuenta.
+  - La decisión (opción c) es tratarlo en la pantalla de RH-B2, con una confirmación (ver
+    "Pendientes técnicos").
+  - La solución de fondo es la de la Fase 5: mandar la temporal por correo al empleado, sin que RH
+    la vea nunca.
+
 ## Saldo de vacaciones (periodo y fechas)
 - El saldo es por periodo de aniversario a aniversario (no año calendario).
 - Una solicitud cuenta en el periodo donde cae su `startDate`; un ajuste cuenta
@@ -296,6 +372,21 @@ Frontend (desde `client/`):
   `["hr"]` (el impacto en `["hr","holiday-impact",fecha]`, fuera del prefijo de la lista);
   cambiar un tipo invalida `["leave-types"]` y marca viejas (`refetchType: "none"`) todas las
   de `["leave-requests"]`, que traen su nombre.
+- "Mi cuenta" (`/mi-cuenta`, todos los roles) cambia la contraseña. La política se explica en la
+  página y los errores salen de `ApiError.code`; el cliente solo revisa campos vacíos y la
+  confirmación. `useChangePassword` reemplaza la sesión sin limpiar la caché (es el mismo usuario)
+  y usa `gcTime: 0` para que la mutación, que guarda las contraseñas, no quede en memoria.
+  Con `user.mustChangePassword`:
+  - `ProtectedRoute` manda cualquier ruta a `/mi-cuenta` y `PublicOnlyRoute` ignora `from`;
+  - `AppLayout` oculta el menú, así que no se pide el contador de aprobaciones;
+  - un 403 `PASSWORD_CHANGE_REQUIRED` en `apiFetch` vuelve a pedir `/auth/me`
+    (`refreshSessionAfterPasswordChangeRequired`).
+  Ese 403 casi siempre significa que otra pestaña inició sesión con OTRA cuenta (la cookie es
+  compartida); un reset de la propia cuenta da 401. Por eso, si `/me` trae otro `id`, se limpia
+  toda la caché como en un login (`replaceSessionUser`, igual tras `useChangePassword`).
+  Tras `STALE_DATA`, la sesión ya no es válida: los campos se vacían y se deshabilitan, y solo
+  queda "Iniciar sesión de nuevo" (logout deliberado), con el foco en ese botón. El 429 culpa a la
+  contraseña solo con `code: "TOO_MANY_ATTEMPTS"`.
 - Títulos de sección: `CardTitle` es un `div`; envolver el texto en `<h2>`.
 - Textos de la interfaz en español; código en inglés.
 - `src/components/ui/` es código generado por shadcn: se puede editar, pero con
@@ -345,7 +436,7 @@ Frontend (desde `client/`):
   sesión, empezando por `GET /api/leave-requests/preview` (cada llamada hace ~5 consultas y el
   debounce del cliente no protege contra un script). Usar `express-rate-limit` con
   `keyGenerator` por `req.user.id` (no por IP, así no depende de `trust proxy`), p. ej. ~60
-  peticiones/minuto. Hoy solo el login tiene límite.
+  peticiones/minuto. Hoy solo el login y `change-password` tienen límite.
 - Errores con datos estructurados: los mensajes de reglas de negocio traen fechas ISO
   ("…(2026-12-02 a 2026-12-02)", "periodo 2026-03-15 a 2027-03-14") que la UI muestra tal cual,
   mientras el resto usa "2 dic 2026". Solución: que el server devuelva el `code` (ya existe)
@@ -390,12 +481,44 @@ Frontend (desde `client/`):
   `ALTER TABLE ... DISABLE TRIGGER` y saltarse la inmutabilidad de `hr_audit_logs`. Usar un rol
   dueño solo para migrar y un rol de la app sin TRUNCATE ni ALTER, con solo `SELECT`/`INSERT`
   sobre `hr_audit_logs` (el trigger de TRUNCATE es una defensa extra, no sustituye el permiso).
-- RH-B (empleados): los empleados nuevos entran con una contraseña temporal que deben cambiar en
-  su primer inicio de sesión (p. ej. `mustChangePassword` en `users`; mientras sea `true` la API
-  solo permite cambiar la contraseña y cerrar sesión). La bitácora registrará empleados y ajustes
-  (`ALTER TYPE "HrAuditEntity" ADD VALUE` no deja usar el valor nuevo en la misma transacción:
-  si un CHECK lo usa, separar en dos migraciones). Las fotos de usuario NUNCA incluyen
-  `passwordHash`.
+- RH-B2 (empleados):
+  - El alta usa `generateTemporaryPassword()` con `mustChangePassword: true`. La columna tiene
+    DEFAULT false: un test del alta debe verificar que se escribe `true`.
+  - La pantalla de reset va junto a la lista, mostrando la contraseña una vez y sin guardarla en la
+    caché de TanStack Query (mutación con `gcTime: 0`).
+  - La pantalla de reset debe pedir una confirmación con una advertencia explícita: RH verá la
+    contraseña temporal y debe entregarla solo al empleado. La advertencia debe ser más fuerte
+    cuando el usuario es MANAGER o HR (riesgo de suplantación: podría aprobar o administrar en su
+    nombre). Ver "Riesgo conocido: suplantación con el reset".
+  - La bitácora registrará empleados y ajustes. `ALTER TYPE ... ADD VALUE` no deja usar el valor
+    nuevo en la misma transacción: si un CHECK lo usa, separar en dos migraciones.
+  - Las fotos de usuario NUNCA incluyen `passwordHash`. Considerar un CHECK genérico que rechace
+    la llave `passwordHash` en `before`/`after`.
+- Contraseñas temporales sin vencimiento: hoy sirven hasta que se cambian. Considerar que venzan
+  (p. ej. 72 h, columna `temporary_password_expires_at`) y que RH tenga que generar otra.
+- El seed usa contraseñas cortas (`Demo1234!`): el login no aplica la política, solo se aplica
+  al elegir una contraseña nueva.
+- **Fase 5 (correo): la temporal se envía por correo directamente al empleado**, sin que RH la
+  vea nunca. El reset (y el alta de RH-B2) dejaría de devolver `temporaryPassword` en la
+  respuesta. Es la solución de fondo al riesgo de suplantación con el reset.
+- Rate limits de contraseñas (login y `change-password`): hoy usan el `MemoryStore` de
+  `express-rate-limit`, que se reinicia con cada arranque y no se comparte entre instancias. Con
+  varias réplicas, usar un store compartido (p. ej. Redis). Decidirlo junto al rate limiting
+  obligatorio de la Fase 6.
+- Despliegue: la imagen debe copiar `server/data/` (la lista de contraseñas comunes) además de
+  `dist/`. Si falta, el servidor no arranca: la lista se carga al importar `password-policy.ts`.
+- NFKC en `hashPassword`/`verifyPassword`: los hashes creados antes con caracteres que NFKC
+  transforma (U+00A0, `ﬁ`, ancho completo, NFD de macOS) dejarían de verificar. Hoy no hay
+  ninguno (solo el seed, en ASCII). Si algún día hay usuarios reales con hashes previos: si falla
+  la verificación normalizada, probar con la cadena original y, si pasa, recalcular el hash.
+- "Cerrar todas mis sesiones": `logout` solo borra la cookie de este navegador, así que un token
+  robado sirve hasta que vence. Un endpoint que avance `passwordChangedAt`
+  (`nextPasswordChangedAt`) cerraría todas las sesiones y devolvería una cookie nueva para la
+  actual.
+- Los números de la política ("15" y "128") están escritos a mano en los textos del cliente
+  (`AccountPage.tsx`). Si el servidor los cambia, el texto queda viejo. Solución: que el error
+  traiga `{ code, minLength, maxLength }`, igual que el pendiente de "errores con datos
+  estructurados", o un endpoint con la política.
 - Festivos: recalcular `businessDays` de las solicitudes activas afectadas al agregar o quitar
   un festivo (hoy solo se avisa con el desglose). Si se hace, en la misma transacción, con evento
   `MODIFIED` y `lockUser`, y decidir qué pasa si quitar un festivo deja un saldo negativo.

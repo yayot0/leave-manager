@@ -15,6 +15,8 @@ import {
 import { createDepartment, deleteDepartment, listDepartments, renameDepartment } from "./departments.service.js";
 import { createLeaveType, listLeaveTypesForHr, updateLeaveType } from "./leave-types.service.js";
 import { createHoliday, deleteHoliday, getHolidayImpact, listHolidays } from "./holidays.service.js";
+import { resetEmployeePassword } from "./employees.service.js";
+import { resetChangePasswordLimits } from "../auth/rate-limits.js";
 
 /**
  * Everything under /api/hr is for HR only: the role check runs once for the
@@ -33,6 +35,17 @@ function actorId(req: Request): string {
 hrRouter.get("/employees/count", async (_req, res) => {
   const count = await prisma.user.count({ where: { role: "EMPLOYEE", isActive: true } });
   res.json({ count });
+});
+
+hrRouter.post("/employees/:id/reset-password", async (req, res) => {
+  const id = catalogIdSchema.parse(req.params.id);
+  const result = await resetEmployeePassword(actorId(req), id);
+  // After the commit: a lockout earned with the old password must not keep
+  // the employee from replacing the new temporary one.
+  await resetChangePasswordLimits(id);
+  // The temporary password is in this body only: no cache may keep it.
+  res.set("Cache-Control", "no-store");
+  res.json(result);
 });
 
 // ---------- Departments ----------

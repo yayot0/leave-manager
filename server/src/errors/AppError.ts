@@ -48,3 +48,14 @@ export class UnprocessableEntityError extends AppError {
     super(422, message);
   }
 }
+
+/**
+ * Builds a module's `withCode(error, code)` helper: one implementation, and
+ * each module only accepts its own codes (e.g. `createWithCode<HrErrorCode>()`).
+ */
+export function createWithCode<Code extends string>() {
+  return function withCode<T extends AppError>(error: T, code: Code): T {
+    error.code = code;
+    return error;
+  };
+}

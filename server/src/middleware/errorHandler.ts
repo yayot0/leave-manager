@@ -54,6 +54,36 @@ export function errorHandler(err: unknown, _req: Request, res: Response, _next: 
     return;
   }
 
-  console.error(err);
+  console.error("Unhandled error", safeErrorLog(err));
   res.status(500).json({ error: "Error interno del servidor" });
+}
+
+export interface SafeErrorLog {
+  name: string;
+  code?: string;
+  stack?: string;
+}
+
+/**
+ * What an unexpected error may write to the logs: its class name, its code
+ * (Prisma "P2002", Postgres "23505"…) and the stack FRAMES only. Never the
+ * message or any other property: a Prisma validation error's message
+ * prints the query arguments (a passwordHash among them), and a driver
+ * error may carry the parameters of the query.
+ */
+export function safeErrorLog(err: unknown): SafeErrorLog {
+  if (!(err instanceof Error)) {
+    return { name: typeof err };
+  }
+  const code = (err as { code?: unknown }).code;
+  // The first lines of `stack` repeat the message; keep only the "at …" frames.
+  const frames = err.stack
+    ?.split("\n")
+    .filter((line) => /^\s+at /.test(line))
+    .join("\n");
+  return {
+    name: err.name,
+    ...(typeof code === "string" || typeof code === "number" ? { code: String(code) } : {}),
+    ...(frames ? { stack: frames } : {}),
+  };
 }

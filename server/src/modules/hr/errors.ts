@@ -1,4 +1,4 @@
-import type { AppError } from "../../errors/AppError.js";
+import { createWithCode } from "../../errors/AppError.js";
 
 /**
  * Machine-readable reasons of the HR catalog errors, sent as `code` so the
@@ -12,9 +12,10 @@ export type HrErrorCode =
   /** Someone saved the entity after the client loaded it (expectedUpdatedAt differs). */
   | "STALE_DATA"
   /** A type that counts against vacations would cap requests below 12 days (Art. 78 LFT). */
-  | "LIMIT_BELOW_LFT_MINIMUM";
+  | "LIMIT_BELOW_LFT_MINIMUM"
+  /** HR tried to reset its own password (it must use change-password). */
+  | "CANNOT_RESET_OWN_PASSWORD"
+  /** The employee is inactive: a password reset would be pointless. */
+  | "EMPLOYEE_INACTIVE";
 
-export function withCode<T extends AppError>(error: T, code: HrErrorCode): T {
-  error.code = code;
-  return error;
-}
+export const withCode = createWithCode<HrErrorCode>();

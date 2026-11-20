@@ -23,6 +23,7 @@ export function buildUser(role: Role, overrides: Partial<User> = {}): User {
     role,
     hireDate: "2021-03-15T00:00:00.000Z",
     isActive: true,
+    mustChangePassword: false,
     departmentId: null,
     managerId: null,
     createdAt: "2021-03-15T00:00:00.000Z",

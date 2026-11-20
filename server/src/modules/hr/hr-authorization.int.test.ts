@@ -25,7 +25,9 @@ async function seedCatalogs() {
   const department = await prisma.department.create({ data: { name: "Ventas" } });
   const leaveType = await createLeaveType({ code: "VAC", name: "Vacaciones" });
   const holiday = await createHoliday("2026-12-25", "Navidad");
-  return { department, leaveType, holiday };
+  // Target of the password reset (no department, so DELETE /departments/:id still works).
+  const employee = await createUser({ role: "EMPLOYEE" });
+  return { department, leaveType, holiday, employee };
 }
 
 type Seed = Awaited<ReturnType<typeof seedCatalogs>>;
@@ -38,6 +40,10 @@ interface Endpoint {
 /** Every endpoint under /api/hr, each with a VALID body/query (so only the role can stop it). */
 const ENDPOINTS: Endpoint[] = [
   { name: "GET /employees/count", call: () => request(app).get("/api/hr/employees/count") },
+  {
+    name: "POST /employees/:id/reset-password",
+    call: (s) => request(app).post(`/api/hr/employees/${s.employee.id}/reset-password`),
+  },
   { name: "GET /departments", call: () => request(app).get("/api/hr/departments") },
   { name: "POST /departments", call: () => request(app).post("/api/hr/departments").send({ name: "Compras" }) },
   {
@@ -72,6 +78,11 @@ async function catalogState() {
     departments: await prisma.department.findMany({ orderBy: { id: "asc" } }),
     leaveTypes: await prisma.leaveType.findMany({ orderBy: { id: "asc" } }),
     holidays: await prisma.holiday.findMany({ orderBy: { id: "asc" } }),
+    // The password reset writes here: a refused call must not touch any account.
+    passwords: await prisma.user.findMany({
+      orderBy: { id: "asc" },
+      select: { id: true, passwordHash: true, mustChangePassword: true, passwordChangedAt: true },
+    }),
     auditLogs: await prisma.hrAuditLog.count(),
   };
 }

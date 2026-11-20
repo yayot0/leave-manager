@@ -45,6 +45,27 @@ export function setUnauthorizedHandler(handler: UnauthorizedHandler): () => void
   };
 }
 
+let passwordChangeRequiredHandler: UnauthorizedHandler | null = null;
+
+/** Code of the 403 the API sends while the user's password is temporary. */
+export const PASSWORD_CHANGE_REQUIRED = "PASSWORD_CHANGE_REQUIRED";
+
+/**
+ * Registers what to do when the API answers 403 PASSWORD_CHANGE_REQUIRED:
+ * the session cookie belongs to a temporary-password account, typically
+ * because another tab logged in with one (an HR reset of THIS session's
+ * user answers 401 instead, since it ends the session). Returns a function
+ * that unregisters it.
+ */
+export function setPasswordChangeRequiredHandler(handler: UnauthorizedHandler): () => void {
+  passwordChangeRequiredHandler = handler;
+  return () => {
+    if (passwordChangeRequiredHandler === handler) {
+      passwordChangeRequiredHandler = null;
+    }
+  };
+}
+
 export interface RequestOptions {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
@@ -100,6 +121,9 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
       unauthorizedHandler?.();
     }
     const errorBody = isApiErrorBody(data) ? data : null;
+    if (response.status === 403 && errorBody?.code === PASSWORD_CHANGE_REQUIRED) {
+      passwordChangeRequiredHandler?.();
+    }
     throw new ApiError(
       response.status,
       errorBody?.error ?? defaultMessageFor(response.status),

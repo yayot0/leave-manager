@@ -13,6 +13,12 @@ export interface User {
   /** ISO date, e.g. "2021-03-15T00:00:00.000Z" (date-only, midnight UTC). */
   hireDate: string;
   isActive: boolean;
+  /**
+   * true while the password is a temporary one set by HR: the API answers
+   * 403 PASSWORD_CHANGE_REQUIRED to everything except the session, changing
+   * the password and logging out, and the app only shows "Mi cuenta".
+   */
+  mustChangePassword: boolean;
   departmentId: string | null;
   managerId: string | null;
   createdAt: string;
