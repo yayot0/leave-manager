@@ -24,6 +24,8 @@ import { getVacationBalance, type DbClient } from "../balance/balance.service.js
 export type ProblemCode =
   | "START_IN_PAST"
   | "START_TOO_FAR"
+  /** Starts before the employee's hire date (possible with a future hire date). */
+  | "START_BEFORE_HIRE_DATE"
   | "INVALID_LEAVE_TYPE"
   | "NO_BUSINESS_DAYS"
   | "EXCEEDS_TYPE_LIMIT"
@@ -39,6 +41,7 @@ export interface LeaveRequestProblem {
 const PROBLEM_ERROR: Record<ProblemCode, (message: string) => AppError> = {
   START_IN_PAST: (message) => new BadRequestError(message),
   START_TOO_FAR: (message) => new BadRequestError(message),
+  START_BEFORE_HIRE_DATE: (message) => new BadRequestError(message),
   INVALID_LEAVE_TYPE: (message) => new BadRequestError(message),
   NO_BUSINESS_DAYS: (message) => new BadRequestError(message),
   EXCEEDS_TYPE_LIMIT: (message) => new BadRequestError(message),
@@ -61,7 +64,11 @@ function hasProblems(problems: LeaveRequestProblem[]): problems is Problems {
 }
 
 /** Problems about the start date itself: with them, a balance would be for the wrong period. */
-const DATE_PROBLEMS: ReadonlySet<ProblemCode> = new Set(["START_IN_PAST", "START_TOO_FAR"]);
+const DATE_PROBLEMS: ReadonlySet<ProblemCode> = new Set([
+  "START_IN_PAST",
+  "START_TOO_FAR",
+  "START_BEFORE_HIRE_DATE",
+]);
 
 export function hasDateProblem(problems: readonly LeaveRequestProblem[]): boolean {
   return problems.some((problem) => DATE_PROBLEMS.has(problem.code));
@@ -109,6 +116,38 @@ export type InputEvaluation =
     };
 
 /**
+ * The start-date limits that depend on the employee's hire date: not before
+ * it (a future hire date is allowed, and a request before it would fall in
+ * no balance period), and no later than the end of the next period. Phase 1
+ * runs it with the hireDate of the session; the POST runs it AGAIN under
+ * lockUserForWrite with the hireDate read there, since HR may have just
+ * changed it.
+ */
+export function evaluateStartAgainstHireDate(
+  startDate: Date,
+  hireDate: Date,
+  today: Date,
+): LeaveRequestProblem[] {
+  const problems: LeaveRequestProblem[] = [];
+  if (startDate.getTime() < hireDate.getTime()) {
+    problems.push({
+      code: "START_BEFORE_HIRE_DATE",
+      message: `La fecha de inicio no puede ser anterior a tu fecha de ingreso (${toISODate(hireDate)})`,
+    });
+  }
+  const latestStart = getLatestRequestableStartDate(hireDate, today);
+  if (startDate.getTime() > latestStart.getTime()) {
+    problems.push({
+      code: "START_TOO_FAR",
+      message:
+        "La fecha de inicio debe caer en tu periodo actual o en el siguiente " +
+        `(a más tardar ${toISODate(latestStart)})`,
+    });
+  }
+  return problems;
+}
+
+/**
  * Phase 1: date limits, leave type and business days. `today` is the
  * calendar date in APP_TIMEZONE (UTC midnight).
  */
@@ -128,15 +167,7 @@ export async function evaluateRequestInput(
     });
   }
 
-  const latestStart = getLatestRequestableStartDate(user.hireDate, today);
-  if (startDate.getTime() > latestStart.getTime()) {
-    problems.push({
-      code: "START_TOO_FAR",
-      message:
-        "La fecha de inicio debe caer en tu periodo actual o en el siguiente " +
-        `(a más tardar ${toISODate(latestStart)})`,
-    });
-  }
+  problems.push(...evaluateStartAgainstHireDate(startDate, user.hireDate, today));
 
   const found = await db.leaveType.findUnique({ where: { id: leaveTypeId }, select: leaveTypeSelect });
   let leaveType: EvaluatedLeaveType | null = null;

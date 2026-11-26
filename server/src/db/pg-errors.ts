@@ -37,17 +37,22 @@ const UNIQUE_VIOLATION = "23505";
 /**
  * True when `err` is a unique violation: Prisma's P2002 for the indexes it
  * manages, or the raw SQLSTATE 23505 for the ones added by hand (e.g.
- * uq_departments_name_lower), which Prisma may not map to P2002.
+ * uq_departments_name_lower), which Prisma may not map to P2002. With
+ * `constraint`, only a violation of that one.
  */
-export function isUniqueViolation(err: unknown): boolean {
+export function isUniqueViolation(err: unknown, constraint?: string): boolean {
   if (!(err instanceof Prisma.PrismaClientKnownRequestError)) {
     return false;
   }
-  if (err.code === "P2002") {
-    return true;
-  }
   const cause = driverCause(err);
-  return cause !== undefined && (cause.originalCode ?? cause.code) === UNIQUE_VIOLATION;
+  const isUnique = err.code === "P2002" || (cause !== undefined && (cause.originalCode ?? cause.code) === UNIQUE_VIOLATION);
+  if (!isUnique || constraint === undefined) {
+    return isUnique;
+  }
+  // Only that constraint (e.g. "users_email_key"): its name travels in the
+  // pg message and/or Prisma's meta, as in isForeignKeyViolation.
+  const where = `${typeof cause?.message === "string" ? cause.message : ""} ${JSON.stringify(err.meta ?? {})}`;
+  return where.includes(constraint);
 }
 
 /** Postgres SQLSTATE for foreign_key_violation (e.g. ON DELETE RESTRICT). */

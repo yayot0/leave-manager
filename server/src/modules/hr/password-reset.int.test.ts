@@ -233,7 +233,9 @@ describe("reset-password: audit log", () => {
     }
   });
 
-  it("the database CHECK rejects a PASSWORD_RESET row with an extra field (passwordHash) in after", async () => {
+  // An extra NON-secret field: a secret key (passwordHash) is now rejected
+  // earlier by chk_hr_audit_logs_no_secrets (hr_employees migration).
+  it("the database CHECK rejects a PASSWORD_RESET row with an extra field (email) in after", async () => {
     const emp = await employee();
     const snapshot = { mustChangePassword: false, passwordChangedAt: new Date().toISOString() };
     const err = await pgErrorOf(() =>
@@ -244,7 +246,7 @@ describe("reset-password: audit log", () => {
           entityId: emp.id,
           action: "PASSWORD_RESET",
           before: snapshot,
-          after: { ...snapshot, mustChangePassword: true, passwordHash: "$argon2id$leaked" },
+          after: { ...snapshot, mustChangePassword: true, email: "leaked@test.local" },
         },
       }),
     );

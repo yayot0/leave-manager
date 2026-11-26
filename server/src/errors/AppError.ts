@@ -5,6 +5,12 @@ export class AppError extends Error {
    * error body so clients can react without parsing the message.
    */
   code?: string;
+  /**
+   * Optional structured details sent as `data` next to `code` (e.g. the
+   * requests that block deactivating an employee). Never secrets: it goes
+   * to the client as is.
+   */
+  data?: Record<string, unknown>;
 
   constructor(statusCode: number, message: string) {
     super(message);
