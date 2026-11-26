@@ -1,4 +1,4 @@
-import type { FormEvent, ReactNode, RefObject } from "react";
+import { useEffect, useRef, type FormEvent, type ReactNode, type RefObject } from "react";
 import { CircleAlert } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -28,12 +28,26 @@ interface CatalogFormDialogProps {
   locked?: boolean;
   /** An error that is not about one field (shown in an alert). */
   generalError: { title: string; message: string } | null;
+  /**
+   * The mutation's error object, so the SAME general error arriving again
+   * (a second failed submit) still moves focus. Optional: without it, a new
+   * message is what triggers it.
+   */
+  errorSignal?: unknown;
   /** Validates and submits; `close` closes the dialog after success. */
   onSubmit: (close: () => void) => void;
   /** First field, focused when the dialog opens. */
   initialFocus?: RefObject<HTMLElement | null>;
   /** Id of extra text the submit button should be described by (e.g. the impact). */
   submitDescribedBy?: string;
+  /**
+   * Shown INSTEAD of the form, in the same dialog (e.g. the temporary
+   * password after creating an employee): one dialog, so focus never has to
+   * jump between two of them. Built with the Dialog parts (DialogTitle…).
+   */
+  replaceWith?: ReactNode;
+  /** Called once the dialog finished closing (e.g. to forget a secret it showed). */
+  onClosed?: () => void;
 }
 
 /**
@@ -57,7 +71,21 @@ export function CatalogFormDialog({
   onSubmit,
   initialFocus,
   submitDescribedBy,
+  replaceWith,
+  onClosed,
+  errorSignal,
 }: CatalogFormDialogProps) {
+  const backRef = useRef<HTMLButtonElement>(null);
+  const generalMessage = generalError ? `${generalError.title}: ${generalError.message}` : null;
+  // A general error: every field and the submit button were disabled while
+  // sending (the browser drops focus from a disabled element), and with
+  // `locked` the submit button is gone. Nobody else moves focus, so it goes
+  // to "Volver", the way out (field errors focus their field instead).
+  // After the re-render that re-enables it, as in ConfirmActionDialog.
+  useEffect(() => {
+    if (generalMessage !== null) backRef.current?.focus();
+  }, [generalMessage, errorSignal]);
+
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (isPending || locked) return;
@@ -71,33 +99,44 @@ export function CatalogFormDialog({
         if (!nextOpen && isPending) return;
         setOpen(nextOpen);
       }}
+      onOpenChangeComplete={(nextOpen) => {
+        if (!nextOpen) onClosed?.();
+      }}
+      // A click outside must not throw away what replaced the form (a password shown once).
+      disablePointerDismissal={replaceWith !== undefined}
     >
       <DialogContent finalFocus={finalFocus} initialFocus={initialFocus} showCloseButton={!isPending}>
-        <form onSubmit={handleSubmit} noValidate className="grid gap-4">
-          <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-            {description ? <DialogDescription>{description}</DialogDescription> : null}
-          </DialogHeader>
+        {replaceWith !== undefined ? (
+          <div className="grid gap-4">{replaceWith}</div>
+        ) : (
+          <form onSubmit={handleSubmit} noValidate className="grid gap-4">
+            <DialogHeader>
+              <DialogTitle>{title}</DialogTitle>
+              {description ? <DialogDescription>{description}</DialogDescription> : null}
+            </DialogHeader>
 
-          {children}
+            {children}
 
-          {generalError ? (
-            <Alert variant="destructive">
-              <CircleAlert aria-hidden="true" />
-              <AlertTitle>{generalError.title}</AlertTitle>
-              <AlertDescription>{generalError.message}</AlertDescription>
-            </Alert>
-          ) : null}
+            {generalError ? (
+              <Alert variant="destructive">
+                <CircleAlert aria-hidden="true" />
+                <AlertTitle>{generalError.title}</AlertTitle>
+                <AlertDescription>{generalError.message}</AlertDescription>
+              </Alert>
+            ) : null}
 
-          <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" disabled={isPending} />}>Volver</DialogClose>
-            {locked ? null : (
-              <Button type="submit" disabled={isPending} aria-describedby={submitDescribedBy}>
-                {isPending ? pendingLabel : submitLabel}
-              </Button>
-            )}
-          </DialogFooter>
-        </form>
+            <DialogFooter>
+              <DialogClose ref={backRef} render={<Button type="button" variant="outline" disabled={isPending} />}>
+                Volver
+              </DialogClose>
+              {locked ? null : (
+                <Button type="submit" disabled={isPending} aria-describedby={submitDescribedBy}>
+                  {isPending ? pendingLabel : submitLabel}
+                </Button>
+              )}
+            </DialogFooter>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );
