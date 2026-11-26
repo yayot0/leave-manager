@@ -103,3 +103,92 @@ export const createHolidaySchema = z
   .strict();
 
 export type CreateHolidayInput = z.infer<typeof createHolidaySchema>;
+
+// ---------- Employees ----------
+
+const ROLES = ["EMPLOYEE", "MANAGER", "HR"] as const;
+
+/** Stored normalized (trimmed, lowercase), as login reads it; CHECK chk_users_email_normalized. */
+const email = z
+  .string({ error: "El correo es obligatorio" })
+  .trim()
+  .toLowerCase()
+  .max(254, "El correo no puede exceder 254 caracteres")
+  .pipe(z.email("Escribe un correo válido"));
+
+const role = z.enum(ROLES, { error: "El rol debe ser EMPLOYEE, MANAGER o HR" });
+
+/** Earliest hire date accepted: anything before is a typo. */
+export const HIRE_DATE_MIN = "1950-01-01";
+
+/**
+ * A real calendar date from 1950 up to one year ahead (an employee may be
+ * registered before their first day). The upper bound is checked against
+ * the server's clock in the service, not here, so it never goes stale.
+ */
+const hireDate = isoDate.refine((date) => date.getUTCFullYear() >= 1950, "La fecha de ingreso no puede ser anterior a 1950");
+
+const id = (label: string) => z.string({ error: `${label} es obligatorio` }).trim().min(1, `${label} es obligatorio`).max(64, `${label} inválido`);
+
+export const createEmployeeSchema = z
+  .object({
+    email,
+    firstName: name("El nombre"),
+    lastName: name("Los apellidos"),
+    role,
+    departmentId: id("El departamento"),
+    /** null = no manager: HR decides their requests. */
+    managerId: id("El jefe").nullable(),
+    hireDate,
+  })
+  .strict();
+
+export const updateEmployeeSchema = z
+  .object({
+    email: email.optional(),
+    firstName: name("El nombre").optional(),
+    lastName: name("Los apellidos").optional(),
+    role: role.optional(),
+    departmentId: id("El departamento").optional(),
+    managerId: id("El jefe").nullable().optional(),
+    hireDate: hireDate.optional(),
+    /** Optimistic concurrency, as in updateLeaveTypeSchema. */
+    expectedUpdatedAt: z.iso.datetime({ error: "expectedUpdatedAt debe ser una fecha ISO" }).optional(),
+  })
+  .strict()
+  .refine(
+    ({ expectedUpdatedAt: _expected, ...fields }) => Object.values(fields).some((value) => value !== undefined),
+    { message: "Indica al menos un campo a cambiar" },
+  );
+
+/** Body of deactivate / reactivate: only the optimistic-concurrency check. */
+export const employeeStateChangeSchema = z
+  .object({ expectedUpdatedAt: z.iso.datetime({ error: "expectedUpdatedAt debe ser una fecha ISO" }).optional() })
+  .strict();
+
+export const EMPLOYEE_PAGE_SIZE_DEFAULT = 20;
+export const EMPLOYEE_PAGE_SIZE_MAX = 100;
+
+export const employeesQuerySchema = z
+  .object({
+    /** Words matched against first name, last name and email (all must match). */
+    q: z.string().trim().max(100, "La búsqueda no puede exceder 100 caracteres").optional(),
+    departmentId: id("El departamento").optional(),
+    role: role.optional(),
+    /** Default: only active employees. */
+    status: z.enum(["active", "inactive", "all"], { error: "El estado debe ser active, inactive o all" }).default("active"),
+    page: z.coerce.number().int("La página debe ser un número entero").min(1, "La página debe ser al menos 1").max(10_000).default(1),
+    pageSize: z.coerce
+      .number()
+      .int("El tamaño de página debe ser un número entero")
+      .min(1, "El tamaño de página debe ser al menos 1")
+      .max(EMPLOYEE_PAGE_SIZE_MAX, `El tamaño de página no puede exceder ${EMPLOYEE_PAGE_SIZE_MAX}`)
+      .default(EMPLOYEE_PAGE_SIZE_DEFAULT),
+  })
+  .strict();
+
+export const hireDateImpactQuerySchema = z.object({ hireDate }).strict();
+
+export type CreateEmployeeInput = z.infer<typeof createEmployeeSchema>;
+export type UpdateEmployeeInput = z.infer<typeof updateEmployeeSchema>;
+export type EmployeesQuery = z.infer<typeof employeesQuerySchema>;

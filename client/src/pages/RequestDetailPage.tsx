@@ -15,7 +15,7 @@ import {
 import { ApiError } from "@/api/client";
 import type { LeaveRequestDetail, Person, RequestEvent, RequestEventAction, RequesterBalance } from "@/api/types";
 import { canAccess, ROUTES } from "@/app/navigation";
-import { cameFromApprovals } from "@/app/paths";
+import { cameFromApprovals, employeeDetailPath, employeeFromState } from "@/app/paths";
 import { useCurrentUser } from "@/auth/current-user";
 import { useLeaveRequest } from "@/hooks/leave-requests";
 import { formatDate, formatDateRange, formatDateTime } from "@/lib/dates";
@@ -288,6 +288,12 @@ function useBackLink(request: LeaveRequestDetail | undefined): { to: string; lab
   const user = useCurrentUser();
   const location = useLocation();
   const othersRequest = request !== undefined && request.requester.id !== user.id;
+  // HR opened it from an employee's detail (e.g. an overdue request that
+  // blocks their deactivation): back to that employee.
+  const employeeId = employeeFromState(location.state);
+  if (employeeId !== null && canAccess(ROUTES.adminEmployees, user.role)) {
+    return { to: employeeDetailPath(employeeId), label: "Volver al empleado" };
+  }
   if ((cameFromApprovals(location.state) || othersRequest) && canAccess(ROUTES.approvals, user.role)) {
     return { to: ROUTES.approvals, label: "Volver a Aprobaciones" };
   }

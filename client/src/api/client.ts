@@ -14,13 +14,16 @@ export class ApiError extends Error {
   readonly details: string[];
   /** Machine-readable reason, when the API sends one (e.g. "OVERLAP"). */
   readonly code: string | undefined;
+  /** Structured details some errors carry (unchecked: narrow it before use). */
+  readonly data: unknown;
 
-  constructor(status: number, message: string, details: string[] = [], code?: string) {
+  constructor(status: number, message: string, details: string[] = [], code?: string, data?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.details = details;
     this.code = code;
+    this.data = data;
   }
 
   get isNetworkError(): boolean {
@@ -129,6 +132,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
       errorBody?.error ?? defaultMessageFor(response.status),
       errorBody?.details ?? [],
       typeof errorBody?.code === "string" ? errorBody.code : undefined,
+      errorBody?.data,
     );
   }
 

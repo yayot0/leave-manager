@@ -56,6 +56,9 @@ export async function createUser(
     isActive?: boolean;
     email?: string;
     managerId?: string | null;
+    firstName?: string;
+    lastName?: string;
+    departmentId?: string | null;
   } = {},
 ) {
   userCounter++;
@@ -64,12 +67,13 @@ export async function createUser(
       email: overrides.email ?? `user${userCounter}-${Date.now()}@test.local`,
       // Tests authenticate by signing a JWT directly, never via password.
       passwordHash: "not-a-real-hash",
-      firstName: "Test",
-      lastName: `User ${userCounter}`,
+      firstName: overrides.firstName ?? "Test",
+      lastName: overrides.lastName ?? `User ${userCounter}`,
       role: overrides.role ?? "EMPLOYEE",
       hireDate: d(overrides.hireDate ?? "2023-02-01"),
       isActive: overrides.isActive ?? true,
       managerId: overrides.managerId ?? null,
+      departmentId: overrides.departmentId ?? null,
     },
   });
 }

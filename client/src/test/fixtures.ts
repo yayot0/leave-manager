@@ -1,5 +1,8 @@
 import type {
+  DeactivationImpact,
   Department,
+  Employee,
+  EmployeeDetail,
   Holiday,
   HrLeaveType,
   LeaveRequest,
@@ -194,6 +197,60 @@ export function buildHoliday(overrides: Partial<Holiday> = {}): Holiday {
     name: "Día de la Revolución Mexicana",
     createdAt: "2026-01-10T16:00:00.000Z",
     updatedAt: "2026-01-10T16:00:00.000Z",
+    ...overrides,
+  };
+}
+
+// ---------- Employees (HR) ----------
+
+export function buildEmployee(overrides: Partial<Employee> = {}): Employee {
+  return {
+    id: "emp-1",
+    email: "laura.mendez@empresa.com",
+    firstName: "Laura",
+    lastName: "Méndez Ortiz",
+    role: "EMPLOYEE",
+    hireDate: "2022-01-10",
+    isActive: true,
+    mustChangePassword: false,
+    departmentId: "dep-1",
+    managerId: "mgr-1",
+    department: { id: "dep-1", name: "Tecnología" },
+    manager: { id: "mgr-1", firstName: "Ricardo", lastName: "Montemayor" },
+    createdAt: "2022-01-10T15:00:00.000Z",
+    updatedAt: "2026-11-01T15:00:00.000Z",
+    ...overrides,
+  };
+}
+
+export function buildEmployeeDetail(overrides: Partial<EmployeeDetail> = {}): EmployeeDetail {
+  const { manager: _manager, ...base } = buildEmployee();
+  return {
+    ...base,
+    manager: { id: "mgr-1", firstName: "Ricardo", lastName: "Montemayor", role: "MANAGER", isActive: true },
+    directReports: [],
+    balance: buildBalance(),
+    permissions: {
+      canEditRole: true,
+      canEditHireDate: true,
+      canEditManager: true,
+      canDeactivate: true,
+      canReactivate: false,
+      canResetPassword: true,
+    },
+    ...overrides,
+  };
+}
+
+export function buildDeactivationImpact(overrides: Partial<DeactivationImpact> = {}): DeactivationImpact {
+  return {
+    activeReports: [],
+    overdueRequests: [],
+    toCancel: { pending: 0, approved: 0 },
+    startedApproved: 0,
+    approvedRunningPastToday: 0,
+    isLastActiveHr: false,
+    blocker: null,
     ...overrides,
   };
 }

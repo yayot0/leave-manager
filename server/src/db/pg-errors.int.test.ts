@@ -1,6 +1,6 @@
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { ConflictError } from "../errors/AppError.js";
-import { isOverlapConstraintViolation, OVERLAP_CONSTRAINT } from "./pg-errors.js";
+import { isOverlapConstraintViolation, isUniqueViolation, OVERLAP_CONSTRAINT } from "./pg-errors.js";
 import {
   createLeaveRequestRow,
   createLeaveType,
@@ -123,5 +123,19 @@ describe("isOverlapConstraintViolation (safety net for the EXCLUDE constraint)",
 
   it("returns false for a ConflictError", () => {
     expect(isOverlapConstraintViolation(new ConflictError())).toBe(false);
+  });
+});
+
+describe("isUniqueViolation with a constraint name", () => {
+  it("recognizes users_email_key by name, and only that constraint", async () => {
+    const user = await createUser();
+    const err = await captureError(() => createUser({ email: user.email }));
+    expect(isUniqueViolation(err)).toBe(true);
+    expect(isUniqueViolation(err, "users_email_key")).toBe(true);
+    expect(isUniqueViolation(err, "uq_departments_name_lower")).toBe(false);
+  });
+
+  it("is false for errors that are not unique violations", async () => {
+    expect(isUniqueViolation(new ConflictError("x"), "users_email_key")).toBe(false);
   });
 });

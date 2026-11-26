@@ -24,7 +24,11 @@ function isHttpClientError(err: unknown): err is HttpClientError {
 
 export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
   if (err instanceof AppError) {
-    res.status(err.statusCode).json(err.code ? { error: err.message, code: err.code } : { error: err.message });
+    res.status(err.statusCode).json({
+      error: err.message,
+      ...(err.code ? { code: err.code } : {}),
+      ...(err.data ? { data: err.data } : {}),
+    });
     return;
   }
 

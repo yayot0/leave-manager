@@ -11,11 +11,13 @@ import { RequestDetailPage } from "@/pages/RequestDetailPage";
 import { DepartmentsPage } from "@/pages/admin/DepartmentsPage";
 import { LeaveTypesPage } from "@/pages/admin/LeaveTypesPage";
 import { HolidaysPage } from "@/pages/admin/HolidaysPage";
+import { EmployeesPage } from "@/pages/admin/EmployeesPage";
+import { EmployeeDetailPage } from "@/pages/admin/EmployeeDetailPage";
 import { AccountPage } from "@/pages/AccountPage";
 
-import { HOME_ROUTE, requestDetailPath, ROUTES } from "./paths";
+import { employeeDetailPath, HOME_ROUTE, requestDetailPath, ROUTES } from "./paths";
 
-export { HOME_ROUTE, requestDetailPath, ROUTES };
+export { employeeDetailPath, HOME_ROUTE, requestDetailPath, ROUTES };
 
 export interface NavItem {
   to: string;
@@ -79,6 +81,22 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: Settings,
     roles: ["HR"],
     Component: HolidaysPage,
+    showInMenu: false,
+  },
+  {
+    to: ROUTES.adminEmployees,
+    label: "Empleados",
+    icon: Settings,
+    roles: ["HR"],
+    Component: EmployeesPage,
+    showInMenu: false,
+  },
+  {
+    to: ROUTES.adminEmployeeDetail,
+    label: "Detalle de empleado",
+    icon: Settings,
+    roles: ["HR"],
+    Component: EmployeeDetailPage,
     showInMenu: false,
   },
   { to: ROUTES.account, label: "Mi cuenta", icon: UserRound, roles: ALL_ROLES, Component: AccountPage },

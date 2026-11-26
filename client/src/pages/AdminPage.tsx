@@ -1,5 +1,5 @@
 import { Link } from "react-router";
-import { Building2, CalendarX2, ChevronRight, ListChecks, Users, type LucideIcon } from "lucide-react";
+import { Building2, CalendarX2, ChevronRight, ListChecks, Users, Wallet, type LucideIcon } from "lucide-react";
 import { ROUTES } from "@/app/paths";
 import { AdminSubnav } from "@/components/admin/AdminSubnav";
 import { PageHeading } from "@/components/PageHeading";
@@ -13,6 +13,12 @@ interface Section {
 }
 
 const SECTIONS: Section[] = [
+  {
+    to: ROUTES.adminEmployees,
+    title: "Empleados",
+    description: "Altas, bajas, jefes, roles y contraseñas temporales.",
+    icon: Users,
+  },
   {
     to: ROUTES.adminDepartments,
     title: "Departamentos",
@@ -31,7 +37,7 @@ const SECTIONS: Section[] = [
     description: "Días de descanso obligatorio que no cuentan como hábiles.",
     icon: CalendarX2,
   },
-  { to: null, title: "Empleados y saldos", description: "Altas, jefes y ajustes de saldo.", icon: Users },
+  { to: null, title: "Ajustes de saldo", description: "Correcciones y días que pasan al siguiente periodo.", icon: Wallet },
 ];
 
 /** Index of the administration sections (HR only). */

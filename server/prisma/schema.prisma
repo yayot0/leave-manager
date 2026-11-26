@@ -74,6 +74,11 @@ model Department {
   @@map("departments")
 }
 
+// Added by hand in migration hr_employees: chk_users_not_own_manager
+// (manager_id <> id), chk_users_email_normalized (email = lower(btrim(email)),
+// so the unique index on email is effectively case-insensitive) and
+// chk_users_first_name_trimmed / chk_users_last_name_trimmed and
+// chk_users_hire_date_range (1950..2100).
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
@@ -251,7 +256,9 @@ model BalanceAdjustment {
 /// replaced in migration audit_password_reset_check so PASSWORD_RESET needs
 /// both sides), chk_hr_audit_logs_snapshots_are_objects (snapshots are JSON objects)
 /// and chk_hr_audit_logs_password_reset_shape (PASSWORD_RESET: EMPLOYEE entity,
-/// snapshots with exactly mustChangePassword and passwordChangedAt, after = temporary).
+/// snapshots with exactly mustChangePassword and passwordChangedAt, after = temporary)
+/// and, in migration hr_employees, chk_hr_audit_logs_no_secrets (no passwordHash,
+/// password_hash, password or temporaryPassword key in before/after).
 model HrAuditLog {
   id String @id @default(cuid())
 

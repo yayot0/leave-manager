@@ -7,15 +7,31 @@ import {
   catalogIdSchema,
   createHolidaySchema,
   createLeaveTypeSchema,
+  createEmployeeSchema,
   departmentInputSchema,
+  employeesQuerySchema,
+  employeeStateChangeSchema,
+  hireDateImpactQuerySchema,
   holidayImpactQuerySchema,
   holidaysQuerySchema,
+  updateEmployeeSchema,
   updateLeaveTypeSchema,
 } from "./hr.schemas.js";
 import { createDepartment, deleteDepartment, listDepartments, renameDepartment } from "./departments.service.js";
 import { createLeaveType, listLeaveTypesForHr, updateLeaveType } from "./leave-types.service.js";
 import { createHoliday, deleteHoliday, getHolidayImpact, listHolidays } from "./holidays.service.js";
-import { resetEmployeePassword } from "./employees.service.js";
+import {
+  createEmployee,
+  deactivateEmployee,
+  getDeactivationImpact,
+  getEmployeeDetail,
+  getHireDateImpact,
+  listEmployees,
+  listManagerOptions,
+  reactivateEmployee,
+  resetEmployeePassword,
+  updateEmployee,
+} from "./employees.service.js";
 import { resetChangePasswordLimits } from "../auth/rate-limits.js";
 
 /**
@@ -35,6 +51,63 @@ function actorId(req: Request): string {
 hrRouter.get("/employees/count", async (_req, res) => {
   const count = await prisma.user.count({ where: { role: "EMPLOYEE", isActive: true } });
   res.json({ count });
+});
+
+// ---------- Employees ----------
+// Static paths (count, manager-options) before "/employees/:id".
+
+hrRouter.get("/employees", async (req, res) => {
+  res.json(await listEmployees(employeesQuerySchema.parse(req.query)));
+});
+
+hrRouter.get("/employees/manager-options", async (_req, res) => {
+  res.json({ managers: await listManagerOptions() });
+});
+
+hrRouter.post("/employees", async (req, res) => {
+  const input = createEmployeeSchema.parse(req.body ?? {});
+  const result = await createEmployee(actorId(req), input);
+  // The temporary password is in this body only: no cache may keep it.
+  res.set("Cache-Control", "no-store");
+  res.status(201).json(result);
+});
+
+hrRouter.get("/employees/:id", async (req, res) => {
+  const id = catalogIdSchema.parse(req.params.id);
+  res.json({ employee: await getEmployeeDetail(actorId(req), id) });
+});
+
+hrRouter.patch("/employees/:id", async (req, res) => {
+  const id = catalogIdSchema.parse(req.params.id);
+  const input = updateEmployeeSchema.parse(req.body ?? {});
+  res.json({ employee: await updateEmployee(actorId(req), id, input) });
+});
+
+hrRouter.get("/employees/:id/hire-date-impact", async (req, res) => {
+  const id = catalogIdSchema.parse(req.params.id);
+  const { hireDate } = hireDateImpactQuerySchema.parse(req.query);
+  res.json(await getHireDateImpact(id, hireDate));
+});
+
+hrRouter.get("/employees/:id/deactivation-impact", async (req, res) => {
+  const id = catalogIdSchema.parse(req.params.id);
+  res.json(await getDeactivationImpact(actorId(req), id));
+});
+
+hrRouter.post("/employees/:id/deactivate", async (req, res) => {
+  const id = catalogIdSchema.parse(req.params.id);
+  const { expectedUpdatedAt } = employeeStateChangeSchema.parse(req.body ?? {});
+  res.json(await deactivateEmployee(actorId(req), id, expectedUpdatedAt));
+});
+
+hrRouter.post("/employees/:id/reactivate", async (req, res) => {
+  const id = catalogIdSchema.parse(req.params.id);
+  const { expectedUpdatedAt } = employeeStateChangeSchema.parse(req.body ?? {});
+  const result = await reactivateEmployee(actorId(req), id, expectedUpdatedAt);
+  // Same as a reset: a lockout earned with an old password must not block the new one.
+  await resetChangePasswordLimits(id);
+  res.set("Cache-Control", "no-store");
+  res.json(result);
 });
 
 hrRouter.post("/employees/:id/reset-password", async (req, res) => {

@@ -1,3 +1,5 @@
+import type { EmployeeFilters } from "./types";
+
 /**
  * Every query key in one place, so invalidations can't drift from the keys
  * the queries use. Everything about leave requests lives under
@@ -27,4 +29,14 @@ export const queryKeys = {
   // Not under ["hr", "holidays"]: refreshing the list must not refetch the
   // impact of the dialog that is closing.
   hrHolidayImpact: (date: string) => ["hr", "holiday-impact", date] as const,
+  // Employees: the list pages and each detail under ["hr","employees"], so
+  // one prefix invalidation refreshes both after any change.
+  hrEmployees: ["hr", "employees"] as const,
+  hrEmployeeList: (filters: EmployeeFilters) => ["hr", "employees", "list", filters] as const,
+  hrEmployeeDetail: (id: string) => ["hr", "employees", "detail", id] as const,
+  hrManagerOptions: ["hr", "employees", "manager-options"] as const,
+  // Previews outside the prefix: refreshing the employee must not refetch
+  // the preview of the dialog that is closing (same as hrHolidayImpact).
+  hrHireDateImpact: (id: string, hireDate: string) => ["hr", "hire-date-impact", id, hireDate] as const,
+  hrDeactivationImpact: (id: string) => ["hr", "deactivation-impact", id] as const,
 };

@@ -71,6 +71,15 @@ Frontend (desde `client/`):
   usuario solicitante (`lockUser`) y después la de la solicitud (`lockLeaveRequest`),
   en ese orden para evitar deadlocks (`server/src/db/locks.ts`); además el UPDATE va
   condicionado al estado leído.
+- **Toda escritura sobre las solicitudes de un usuario revalida `isActive` bajo el lock.**
+  `requireAuth` revisa `isActive` ANTES de la transacción; si RH da de baja al empleado justo
+  después, una solicitud nueva quedaría PENDING para un inactivo. Por eso crear, cancelar y
+  decidir bloquean al solicitante con `lockUserForWrite` (bloquea y lee en la misma sentencia) y
+  rechazan si ya no está activo: crear y cancelar → 401 (el actor es el solicitante); decidir →
+  409 `EMPLOYEE_INACTIVE`. La baja toma el mismo lock, así que se serializan. Crear usa además
+  el `hireDate` leído bajo el lock. Decidir también re-lee al ACTOR (rol e `isActive`) y responde
+  401 si ya no está activo; es una lectura, no un lock: bloquear también la fila del actor podría
+  hacer deadlock (dos HR sin jefe activo decidiendo una la del otro).
 
 ## Crear solicitud y vista previa
 - `POST /api/leave-requests` y `GET /api/leave-requests/preview?leaveTypeId=&startDate=&endDate=`
@@ -236,10 +245,83 @@ Frontend (desde `client/`):
   con RH. La bitácora solo registra el reset, no lo que se hizo después.
   - Lo mitiga que el dueño pierde sus sesiones y su contraseña deja de funcionar, así que se da
     cuenta.
-  - La decisión (opción c) es tratarlo en la pantalla de RH-B2, con una confirmación (ver
-    "Pendientes técnicos").
+  - Se trata en la pantalla de RH-B2 (opción c): la confirmación del reset advierte que RH verá
+    la temporal, y para MANAGER/HR la advertencia es más fuerte y exige marcar una casilla.
   - La solución de fondo es la de la Fase 5: mandar la temporal por correo al empleado, sin que RH
     la vea nunca.
+
+## Empleados (Fase RH-B2)
+- Rutas (todas HR, bajo `/api/hr/employees`): `GET /` (lista), `GET /manager-options` (activos
+  MANAGER/HR), `GET /:id` (detalle con jefe, reportes directos, saldo actual y `permissions`),
+  `GET /:id/hire-date-impact?hireDate=`, `GET /:id/deactivation-impact`, `POST /` (alta),
+  `PATCH /:id`, `POST /:id/deactivate`, `POST /:id/reactivate`, `POST /:id/reset-password`.
+  Estáticas antes de `/:id`.
+- Lista con paginación por OFFSET (`page`, `pageSize` 20, máx. 100; `total`, `totalPages`): la
+  tabla es chica y RH quiere "página 3 de 8" y una URL compartible; keyset no deja saltar a una
+  página. Orden estable `lastName, firstName, id`. `q` busca cada palabra en nombre, apellido o
+  correo (`contains` insensitive; `contains` NO escapa los comodines de LIKE, así que `escapeLike` escapa `\`, `%` y `_`). `status` = `active` (default) | `inactive`
+  | `all`. Página fuera de rango: lista vacía con `total`.
+- Correo normalizado (`trim` + minúsculas, igual que el login); CHECK `chk_users_email_normalized`
+  hace que el UNIQUE sea en la práctica insensible a mayúsculas. Duplicado → 409 `DUPLICATE_EMAIL`.
+- **Advisory lock del directorio (`lockEmployeeDirectory`)**: alta, edición, baja y reactivación
+  lo toman PRIMERO. Sus reglas cruzan filas (write skew que los locks de fila no evitan): ciclo
+  A→B y B→A en paralelo, dos HR dándose de baja mutuamente, bajar a EMPLOYEE a B mientras alguien
+  lo elige como jefe, dar de baja a un jefe mientras le asignan un reporte. En READ COMMITTED cada
+  sentencia toma una foto nueva, así que lo leído DESPUÉS del lock ya incluye el commit anterior.
+  Nunca correr esas transacciones con un aislamiento mayor (la foto se tomaría antes del lock).
+  Orden: directorio → `lockUser` → `lockLeaveRequest`; las solicitudes nunca lo toman (sin
+  deadlocks). Bajo el lock se re-lee al actor: si ya no está activo, 401; si ya no es HR, 403. Reset de contraseña y
+  `change-password` no lo toman (no tocan rol, estado ni jefe); si un día lo hicieran, deben tomarlo.
+- Jefe: activo y con rol MANAGER o HR (`MANAGER_NOT_ELIGIBLE` 409), nunca uno mismo
+  (`MANAGER_IS_SELF` 400; CHECK `chk_users_not_own_manager` como segunda defensa) ni alguien que le
+  reporte directa o indirectamente (`MANAGER_CYCLE` 409; CTE recursiva con `UNION`, que termina
+  aunque existiera un ciclo viejo; los inactivos cuentan, porque el ciclo volvería al reactivarlos).
+- Rol: no se baja a EMPLOYEE a quien tiene personas ACTIVAS a su cargo (`HAS_ACTIVE_REPORTS`;
+  primero hay que reasignarlas). Siempre queda al menos un HR activo (`LAST_ACTIVE_HR`).
+- **Segregación de funciones: RH no modifica datos propios que le den ventaja**: su rol
+  (`CANNOT_CHANGE_OWN_ROLE`), su estado (`CANNOT_DEACTIVATE_SELF`), su fecha de ingreso (más días
+  de vacaciones, `CANNOT_EDIT_OWN_HIRE_DATE`) ni su jefe (quien le aprueba, `CANNOT_CHANGE_OWN_MANAGER`),
+  todos 403; tampoco su contraseña por reset (RH-B1). Otra persona de RH sí puede. Nombre, correo y
+  departamento propios sí se editan. El detalle trae `permissions` con estas reglas; el cliente no
+  las reimplementa.
+- Edición: `expectedUpdatedAt` y solo los campos cambiados (patrón de tipos de permiso); sin
+  cambios no escribe ni audita. Ojo: `updatedAt` de `users` también cambia si el empleado cambia su
+  contraseña, así que RH puede recibir `STALE_DATA` sin que nadie tocara sus datos.
+- Fecha de ingreso: de 1950 a hoy + 1 año (`HIRE_DATE_OUT_OF_RANGE`; CHECK 1950–2100). No puede
+  quedar después del `startDate` de una PENDING/APPROVED (`HIRE_DATE_AFTER_REQUESTS` 409 con
+  `data.earliestRequestStart`): así `availableWithoutRequest` siempre cae en el periodo correcto.
+  `hire-date-impact` da `{ asOf, current, proposed, problem }` con `getVacationBalance` (mismo
+  "hoy" que Mi saldo) y la misma regla del PATCH (`employee-validation.ts`).
+- Alta: `generateTemporaryPassword()`, solo el hash, `mustChangePassword: true` escrito
+  EXPLÍCITO (la columna tiene DEFAULT false). Responde 201 `{ temporaryPassword, employee }` con
+  `Cache-Control: no-store`, una sola vez.
+- Baja (`planDeactivation`, la usan el preview y el POST):
+  - 409 `HAS_ACTIVE_REPORTS`, `LAST_ACTIVE_HR`, o `HAS_OVERDUE_PENDING_REQUESTS` si tiene PENDING
+    que ya empezaron (`startDate <= hoy`), con la lista en `data.requests`: el empleado pudo faltar
+    con permiso de palabra y en la baja lo no disfrutado se paga en el finiquito (Art. 79 LFT), así
+    que su jefe (o RH) debe decidirlas antes; nunca se deciden solas.
+  - En la misma transacción se cancelan las PENDING y APPROVED con `startDate > hoy` (con
+    `transition()`, evento `CANCELLED` firmado por RH con la nota "Cancelada por la baja del
+    empleado"; `decider_id` no se toca). Las APPROVED ya iniciadas NO se tocan: los días se
+    tomaron y el finiquito necesita ese registro.
+  - Las sesiones mueren solas (`requireAuth` revisa `isActive`).
+- Reactivar: el jefe debe seguir siendo elegible (si no, se edita antes); genera una temporal NUEVA
+  (la anterior pudo quedar comprometida), `mustChangePassword`, `nextPasswordChangedAt`, limpia los
+  rate limits de `change-password`; `no-store`.
+- `AppError.data` (opcional) viaja como `data` junto a `code`: datos estructurados del error, nunca
+  secretos.
+- Crear solicitud: `START_BEFORE_HIRE_DATE` (400) si `startDate < hireDate` (posible con ingreso futuro);
+  `evaluateStartAgainstHireDate` corre en la fase 1 y otra vez bajo `lockUserForWrite` con el `hireDate`
+  fresco (también `START_TOO_FAR`).
+- Actor que perdió acceso a media petición: inactivo → 401, sin rol HR → 403 (`assertActorIsActiveHr`;
+  también en el reset de contraseña).
+- Alta de MANAGER/HR: misma advertencia fuerte y casilla que el reset (riesgo de cuenta "fantasma":
+  RH crea o asciende una cuenta HR, ve su temporal y la usa para saltarse la segregación; la bitácora
+  registra el CREATED/UPDATED, pero nada lo impide hasta la Fase 5).
+- Bitácora `EMPLOYEE`: CREATED, UPDATED, DEACTIVATED, REACTIVATED (y PASSWORD_RESET). Foto en LISTA
+  BLANCA (`employeeAuditSnapshot`): id, email, firstName, lastName, role, departmentId, managerId,
+  hireDate, isActive, mustChangePassword. CHECK `chk_hr_audit_logs_no_secrets` rechaza las llaves
+  `passwordHash`, `password_hash`, `password` y `temporaryPassword` en `before`/`after`.
 
 ## Saldo de vacaciones (periodo y fechas)
 - El saldo es por periodo de aniversario a aniversario (no año calendario).
@@ -345,8 +427,8 @@ Frontend (desde `client/`):
   a login sin `from`. No depende del orden entre la navegación de React Router (que es una
   transition) y la actualización de TanStack Query, que no está garantizado.
 - Administración (solo HR): `/administracion` es un índice y cada catálogo es una subruta en
-  `NAV_ITEMS` con `showInMenu: false` (`/administracion/departamentos`, `/tipos-de-permiso`,
-  `/festivos`); cualquier otra `/administracion/...` se niega. `matchNested: true` mantiene
+  `NAV_ITEMS` con `showInMenu: false` (`/administracion/empleados`, `/empleados/:id`,
+  `/departamentos`, `/tipos-de-permiso`, `/festivos`); cualquier otra `/administracion/...` se niega. `matchNested: true` mantiene
   resaltado "Administración" en el menú en sus subpáginas; `AdminSubnav` enlaza las secciones.
 - **Los diálogos de confirmación y de formulario viven FUERA de las filas y listas.** Un diálogo
   dentro de una fila muere con la fila: tras un 404/409 la lista se refresca, la fila desaparece
@@ -387,6 +469,27 @@ Frontend (desde `client/`):
   Tras `STALE_DATA`, la sesión ya no es válida: los campos se vacían y se deshabilitan, y solo
   queda "Iniciar sesión de nuevo" (logout deliberado), con el foco en ese botón. El 429 culpa a la
   contraseña solo con `code: "TOO_MANY_ATTEMPTS"`.
+- Empleados (`EmployeesPage`, `EmployeeDetailPage`):
+  - Los filtros viven en la URL (`useSearchParams`); la URL solo lleva lo que difiere del default y
+    un valor mal formado cae al default. La búsqueda se teclea en estado local y llega a la URL con
+    debounce y `replace` (teclear no agrega entradas al historial: reemplaza la actual); los selects y
+    la paginación crean entrada nueva (`push`) y la paginación son `Link` reales. Si la URL cambia por navegación (botón
+    de regresar), la caja de búsqueda la sigue.
+  - Las acciones (editar, restablecer, baja, reactivar) viven en el DETALLE, no en filas.
+  - "Volver" con router state, nunca una URL: la lista pasa `fromEmployeeListState(search)` y el
+    detalle regresa con `employeeListBackPath(state)` (solo llaves de filtro conocidas sobre una ruta
+    fija); el detalle pasa `fromEmployeeState(id)` al enlazar una solicitud y su "Volver" regresa a
+    ese empleado (`useBackLink`).
+  - Contraseña temporal (alta, reactivar, restablecer): se muestra UNA vez dentro del MISMO diálogo
+    que la generó (`replaceWith` de `CatalogFormDialog`, `PasswordActionDialog`) con
+    `TemporaryPasswordPanel` (Copiar con `navigator.clipboard`, aviso "No se volverá a mostrar"). Un
+    solo diálogo, para no pasar el foco entre dos. La mutación usa `gcTime: 0` y `reset()` al recibirla;
+    el diálogo la olvida al terminar de cerrarse (`onOpenChangeComplete`) y no se cierra con clic fuera.
+  - Restablecer a un MANAGER/HR: advertencia más fuerte y casilla obligatoria (riesgo de suplantación).
+  - Baja: el diálogo pide `deactivation-impact` al abrir y solo ofrece confirmar sin `blocker`; las
+    vencidas se listan con enlace a cada solicitud.
+  - El cambio de fecha de ingreso muestra antes de guardar cómo cambia el saldo actual
+    (`hire-date-impact`, debounce, región `role="status"` que describe el botón).
 - Títulos de sección: `CardTitle` es un `div`; envolver el texto en `<h2>`.
 - Textos de la interfaz en español; código en inglés.
 - `src/components/ui/` es código generado por shadcn: se puede editar, pero con
@@ -447,6 +550,9 @@ Frontend (desde `client/`):
 - `BalanceAdjustment.leaveTypeId` existe pero `getVacationBalance` suma todos los ajustes sin
   filtrar por tipo: definir antes del CRUD de ajustes si un ajuste ligado a un tipo que no
   descuenta vacaciones debe afectar el saldo.
+- Fase 6: dividir el bundle del cliente con carga perezosa de rutas (`React.lazy` en las páginas de
+  `NAV_ITEMS`, o `lazy` de las rutas de React Router), porque `vite build` ya avisa que el chunk
+  principal pasa del límite. Cuidar que `PageHeading`/foco y los estados de carga sigan funcionando.
 - Configurar `app.set("trust proxy", ...)` antes de desplegar detrás de un proxy o
   load balancer, para que `express-rate-limit` identifique la IP real del cliente.
 - Migrar `DATABASE_URL` (hoy leído directo de `process.env` en `server/src/db/prisma.ts`)
@@ -461,39 +567,39 @@ Frontend (desde `client/`):
   y cancelar ya lo usan.)
 - Paginación de `GET /api/leave-requests/mine` y de
   `GET /api/leave-requests/pending-approvals` (`take`/`cursor` o filtro por periodo).
-- Al hacer el CRUD de empleados (HR):
-  - Validar `managerId !== id`: con un usuario como su propio jefe, `hasActiveManager`
-    da `true` y nadie puede decidir sus solicitudes.
-  - Validar que `managerId` apunte a un usuario MANAGER o HR (hoy `canDecide` no mira
-    el rol del jefe directo).
-  - Mostrar a HR las PENDING que nadie puede decidir (p. ej. el único HR activo sin
-    jefe activo).
+- Mostrar a HR las PENDING que nadie puede decidir (p. ej. el único HR activo sin jefe activo,
+  que no puede decidir las suyas). La RH-B2 ya valida jefe activo MANAGER/HR y sin ciclos.
+- Búsqueda de empleados sin acentos ("Saldana" no encuentra "Saldaña"): requiere la extensión
+  `unaccent` (migración, db-architect). Hoy distingue acentos pero no mayúsculas.
 - Contador de "Aprobaciones" del menú: hoy solo se refresca al invalidar, al montar o al volver
   el foco a la ventana. Cuando exista el rate limiting por usuario, agregarle `refetchInterval`
   (1–2 min, `refetchIntervalInBackground: false`) para que un jefe con la pestaña abierta vea
   llegar solicitudes nuevas.
-- Fase de RH: revisar el "Volver" del detalle (`useBackLink` en `RequestDetailPage`). Hoy toda
-  solicitud ajena regresa a Aprobaciones; cuando HR llegue desde otras pantallas (empleados,
-  reportes) debe regresar a la de origen (otro valor literal de router state, como
-  `FROM_APPROVALS_STATE`).
+- "Volver" del detalle de solicitud: desde el detalle de un empleado ya regresa a ese empleado
+  (`fromEmployeeState`); cualquier otra solicitud ajena regresa a Aprobaciones. Si se agregan
+  más orígenes (reportes), usar otro state literal igual.
 - **Obligatorio antes del despliegue (Fase 6): roles de base de datos.** La app no debe
   conectarse como dueña de las tablas (hoy `leave_admin`): un dueño puede hacer
   `ALTER TABLE ... DISABLE TRIGGER` y saltarse la inmutabilidad de `hr_audit_logs`. Usar un rol
   dueño solo para migrar y un rol de la app sin TRUNCATE ni ALTER, con solo `SELECT`/`INSERT`
   sobre `hr_audit_logs` (el trigger de TRUNCATE es una defensa extra, no sustituye el permiso).
-- RH-B2 (empleados):
-  - El alta usa `generateTemporaryPassword()` con `mustChangePassword: true`. La columna tiene
-    DEFAULT false: un test del alta debe verificar que se escribe `true`.
-  - La pantalla de reset va junto a la lista, mostrando la contraseña una vez y sin guardarla en la
-    caché de TanStack Query (mutación con `gcTime: 0`).
-  - La pantalla de reset debe pedir una confirmación con una advertencia explícita: RH verá la
-    contraseña temporal y debe entregarla solo al empleado. La advertencia debe ser más fuerte
-    cuando el usuario es MANAGER o HR (riesgo de suplantación: podría aprobar o administrar en su
-    nombre). Ver "Riesgo conocido: suplantación con el reset".
-  - La bitácora registrará empleados y ajustes. `ALTER TYPE ... ADD VALUE` no deja usar el valor
-    nuevo en la misma transacción: si un CHECK lo usa, separar en dos migraciones.
-  - Las fotos de usuario NUNCA incluyen `passwordHash`. Considerar un CHECK genérico que rechace
-    la llave `passwordHash` en `before`/`after`.
+- Bitácora: los ajustes de saldo (fase siguiente) también irán a `hr_audit_logs`.
+  `ALTER TYPE ... ADD VALUE` no deja usar el valor nuevo en la misma transacción: si un CHECK lo
+  usa, separar en dos migraciones.
+- Reactivar vs. recontratar: hoy reactivar conserva el `hireDate` (antigüedad) y una APPROVED vieja
+  impide mover la fecha de ingreso después de ella. En México una recontratación normalmente inicia una
+  relación laboral NUEVA (nueva fecha de ingreso), mientras que corregir una baja hecha por error debe
+  conservar la antigüedad: en el futuro conviene distinguir esas dos acciones (p. ej. "corregir baja" y
+  "recontratar" con fecha de reingreso, evaluando solo solicitudes futuras).
+- Cambiar `hireDate` puede dejar el periodo actual negativo (bloquea aprobaciones por el 422) o dejar
+  ajustes con `effectiveDate` fuera de todo periodo: que `hire-date-impact` traiga `blocksApprovals` y
+  revisar los ajustes cuando exista su CRUD.
+- La baja no toca las APPROVED en curso: sus días posteriores a la baja siguen contando como tomados;
+  el impacto ya los avisa (`approvedRunningPastToday`) para un posible ajuste en el finiquito.
+- Aislamiento: pasar `isolationLevel: ReadCommitted` explícito en las transacciones del directorio
+  (hoy solo lo dicen los comentarios).
+- Contraseña temporal en el cliente: queda en el portapapeles del sistema (avisar que se borre); Escape
+  cierra el panel donde se muestra; si RH navega atrás mientras se envía, el server la genera y nadie la ve.
 - Contraseñas temporales sin vencimiento: hoy sirven hasta que se cambian. Considerar que venzan
   (p. ej. 72 h, columna `temporary_password_expires_at`) y que RH tenga que generar otra.
 - El seed usa contraseñas cortas (`Demo1234!`): el login no aplica la política, solo se aplica
@@ -540,9 +646,6 @@ Frontend (desde `client/`):
   `version` entera.
 - Pantalla para consultar la bitácora de RH (filtros por entidad y por actor; ordenar por
   `createdAt` y luego `id`, porque varias filas de una transacción comparten `created_at`).
-- `availableWithoutRequest` supone que la propia solicitud cae en el periodo calculado; dejaría
-  de ser cierto si RH pudiera mover `hireDate` después de su `startDate`. Revisarlo en el CRUD
-  de empleados.
 - LFT pendiente de aplicar: Art. 78 (al menos 12 días continuos si el trabajador lo
   pide) y Art. 81 (las vacaciones se otorgan dentro de los 6 meses siguientes al
   aniversario).

@@ -21,6 +21,52 @@ export async function lockUser(tx: Prisma.TransactionClient, userId: string): Pr
 }
 
 /**
+ * Like lockUser, but also reads the row in the same statement, so the caller
+ * sees the user as it is once the lock is held. `requireAuth` checked
+ * isActive BEFORE the transaction: if HR deactivated the user in between
+ * (deactivation takes this same lock), the caller must refuse to write,
+ * or a request could end up PENDING for an inactive employee. Every write
+ * on a user's requests uses this instead of lockUser. null = no such user.
+ */
+export async function lockUserForWrite(
+  tx: Prisma.TransactionClient,
+  userId: string,
+): Promise<{ isActive: boolean; hireDate: Date } | null> {
+  const rows = await tx.$queryRaw<{ is_active: boolean; hire_date: Date }[]>`
+    SELECT is_active, hire_date FROM users WHERE id = ${userId} FOR NO KEY UPDATE`;
+  const row = rows[0];
+  return row ? { isActive: row.is_active, hireDate: row.hire_date } : null;
+}
+
+/**
+ * Arbitrary constant key of the employee-directory advisory lock. Advisory
+ * keys are global to the database: never reuse this number for anything else.
+ */
+const EMPLOYEE_DIRECTORY_LOCK_KEY = 4_120_250_001;
+
+/**
+ * Serializes EVERY change to the employee directory (create, edit,
+ * deactivate, reactivate) until the transaction ends. Needed because their
+ * rules span several rows, which row locks cannot protect (write skew):
+ * - T1 sets manager(A) = B while T2 sets manager(B) = A: each walks the
+ *   chain, sees no cycle (the other has not committed) and both commit;
+ * - two HR users deactivate each other: each still sees two active HR;
+ * - demoting B to EMPLOYEE while someone gets B as their new manager;
+ * - deactivating a manager while someone is assigned to them.
+ * Under READ COMMITTED every statement takes a fresh snapshot, so whatever
+ * is read AFTER this lock includes the previous change's commit.
+ *
+ * Lock order: this lock first, then lockUser, then lockLeaveRequest. Leave
+ * request operations never take it, so no wait cycle (deadlock) can form.
+ * Directory changes are rare, so serializing them costs nothing.
+ */
+export async function lockEmployeeDirectory(tx: Prisma.TransactionClient): Promise<void> {
+  // $executeRaw: the function returns `void`, a column type $queryRaw would
+  // have to deserialize.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(${EMPLOYEE_DIRECTORY_LOCK_KEY}::bigint)`;
+}
+
+/**
  * HR catalog rows: locked before reading the "before" snapshot of the audit
  * log, so a concurrent change cannot slip between that read and the write
  * (and the log never records a "before" that was already stale). Separate

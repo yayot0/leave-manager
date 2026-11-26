@@ -1,5 +1,5 @@
 import { prisma } from "../../db/prisma.js";
-import { lockLeaveRequest, lockUser } from "../../db/locks.js";
+import { lockLeaveRequest, lockUserForWrite } from "../../db/locks.js";
 import { env } from "../../config/env.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { todayInTimeZone, toISODate } from "../../domain/dates.js";
@@ -11,6 +11,7 @@ import {
 } from "../../domain/leave-request-state.js";
 import {
   ConflictError,
+  UnauthorizedError,
   ForbiddenError,
   NotFoundError,
   UnprocessableEntityError,
@@ -216,8 +217,31 @@ export async function applyLeaveRequestAction(
   }
 
   await prisma.$transaction(async (tx) => {
-    await lockUser(tx, visible.requesterId);
+    const requester = await lockUserForWrite(tx, visible.requesterId);
     await lockLeaveRequest(tx, id);
+
+    // requireAuth checked the actor BEFORE this transaction. Re-read it now:
+    // HR may have deactivated it (or changed its role) in between. A plain
+    // read, not a lock: locking the actor's row too could deadlock (two HR
+    // without an active manager deciding each other's requests at once).
+    // What must never happen — a write on the requests of an inactive
+    // requester — is ruled out by the requester's lock just taken, which
+    // deactivation takes too.
+    const freshActor = await tx.user.findUnique({
+      where: { id: actor.id },
+      select: { id: true, role: true, isActive: true },
+    });
+    if (!freshActor?.isActive) {
+      throw new UnauthorizedError();
+    }
+    const current: Actor = freshActor;
+    if (!requester?.isActive) {
+      // Only HR decides about an inactive employee's requests: deactivation
+      // already cancelled what could be cancelled.
+      const error = new ConflictError("El empleado fue dado de baja; esta solicitud ya no se puede modificar");
+      error.code = "EMPLOYEE_INACTIVE";
+      throw error;
+    }
 
     // Computed after waiting for the locks, so a wait across midnight in
     // APP_TIMEZONE still uses the right "today".
@@ -228,17 +252,17 @@ export async function applyLeaveRequestAction(
     // Only what the decision needs; the full detail (events, people) is
     // loaded after commit, outside the transaction.
     const request = await tx.leaveRequest.findUnique({ where: { id }, select: decisionSelect });
-    if (!request || !canView(actor, { requester: request.requester, deciderId: request.deciderId })) {
+    if (!request || !canView(current, { requester: request.requester, deciderId: request.deciderId })) {
       throw new NotFoundError(NOT_FOUND_MESSAGE);
     }
 
     if (action === "CANCEL") {
-      if (actor.id !== request.requester.id) {
+      if (current.id !== request.requester.id) {
         throw new ForbiddenError("Solo quien hizo la solicitud puede cancelarla");
       }
-    } else if (actor.id === request.requester.id) {
+    } else if (current.id === request.requester.id) {
       throw new ForbiddenError("No puedes aprobar ni rechazar tus propias solicitudes");
-    } else if (!canDecide(actor, request.requester)) {
+    } else if (!canDecide(current, request.requester)) {
       throw new ForbiddenError("No te corresponde decidir esta solicitud");
     }
 
@@ -271,7 +295,7 @@ export async function applyLeaveRequestAction(
           { status: result.next }
         : {
             status: result.next,
-            deciderId: actor.id,
+            deciderId: current.id,
             decidedAt: new Date(),
             decisionNote: note ?? null,
           };
@@ -285,7 +309,7 @@ export async function applyLeaveRequestAction(
     }
 
     await tx.requestEvent.create({
-      data: { leaveRequestId: id, actorId: actor.id, action: EVENT_FOR_ACTION[action], note },
+      data: { leaveRequestId: id, actorId: current.id, action: EVENT_FOR_ACTION[action], note },
     });
   });
 

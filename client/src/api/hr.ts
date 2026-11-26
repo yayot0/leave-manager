@@ -1,6 +1,20 @@
 import { apiFetch } from "./client";
 import type {
   CreatedHolidayResponse,
+  DeactivationImpact,
+  DeactivationResponse,
+  Employee,
+  EmployeeDetail,
+  EmployeeDetailResponse,
+  EmployeeFilters,
+  EmployeeResponse,
+  EmployeesPage,
+  EmployeeWithPasswordResponse,
+  HireDateImpact,
+  ManagerOption,
+  ManagerOptionsResponse,
+  PasswordResetResponse,
+  Role,
   Department,
   DepartmentResponse,
   DepartmentsResponse,
@@ -92,4 +106,75 @@ export async function createHoliday(input: { date: string; name: string }): Prom
 
 export async function deleteHoliday(id: string): Promise<HolidayImpact> {
   return apiFetch<HolidayImpact>(holidayPath(id), { method: "DELETE" });
+}
+
+// ---------- Employees ----------
+
+const employeePath = (id: string) => `/hr/employees/${encodeURIComponent(id)}`;
+
+export interface EmployeeInput {
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: Role;
+  departmentId: string;
+  /** null = no manager (HR decides their requests). */
+  managerId: string | null;
+  /** "YYYY-MM-DD" */
+  hireDate: string;
+}
+
+/** Only the fields that changed, plus the updatedAt the form loaded. */
+export type UpdateEmployeeInput = Partial<EmployeeInput> & { expectedUpdatedAt?: string };
+
+/** Only the filters that differ from the defaults go to the API. */
+export async function listEmployees(filters: EmployeeFilters, signal?: AbortSignal): Promise<EmployeesPage> {
+  const query = new URLSearchParams({ status: filters.status, page: String(filters.page) });
+  if (filters.q.trim() !== "") query.set("q", filters.q.trim());
+  if (filters.departmentId !== "") query.set("departmentId", filters.departmentId);
+  if (filters.role !== "") query.set("role", filters.role);
+  return apiFetch<EmployeesPage>(`/hr/employees?${query}`, { signal });
+}
+
+export async function getEmployee(id: string, signal?: AbortSignal): Promise<EmployeeDetail> {
+  const { employee } = await apiFetch<EmployeeDetailResponse>(employeePath(id), { signal });
+  return employee;
+}
+
+export async function listManagerOptions(signal?: AbortSignal): Promise<ManagerOption[]> {
+  const { managers } = await apiFetch<ManagerOptionsResponse>("/hr/employees/manager-options", { signal });
+  return managers;
+}
+
+export async function createEmployee(input: EmployeeInput): Promise<EmployeeWithPasswordResponse> {
+  return apiFetch<EmployeeWithPasswordResponse>("/hr/employees", { method: "POST", body: input });
+}
+
+export async function updateEmployee(id: string, input: UpdateEmployeeInput): Promise<Employee> {
+  const { employee } = await apiFetch<EmployeeResponse>(employeePath(id), { method: "PATCH", body: input });
+  return employee;
+}
+
+export async function getHireDateImpact(id: string, hireDate: string, signal?: AbortSignal): Promise<HireDateImpact> {
+  const query = new URLSearchParams({ hireDate });
+  return apiFetch<HireDateImpact>(`${employeePath(id)}/hire-date-impact?${query}`, { signal });
+}
+
+export async function getDeactivationImpact(id: string, signal?: AbortSignal): Promise<DeactivationImpact> {
+  return apiFetch<DeactivationImpact>(`${employeePath(id)}/deactivation-impact`, { signal });
+}
+
+export async function deactivateEmployee(id: string, expectedUpdatedAt: string): Promise<DeactivationResponse> {
+  return apiFetch<DeactivationResponse>(`${employeePath(id)}/deactivate`, { method: "POST", body: { expectedUpdatedAt } });
+}
+
+export async function reactivateEmployee(id: string, expectedUpdatedAt: string): Promise<EmployeeWithPasswordResponse> {
+  return apiFetch<EmployeeWithPasswordResponse>(`${employeePath(id)}/reactivate`, {
+    method: "POST",
+    body: { expectedUpdatedAt },
+  });
+}
+
+export async function resetEmployeePassword(id: string): Promise<PasswordResetResponse> {
+  return apiFetch<PasswordResetResponse>(`${employeePath(id)}/reset-password`, { method: "POST" });
 }

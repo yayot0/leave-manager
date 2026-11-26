@@ -31,6 +31,8 @@ export interface ApiErrorBody {
   details?: string[];
   /** Business-rule reason, e.g. "OVERLAP" (same codes as the preview's problems). */
   code?: string;
+  /** Structured details of some errors (e.g. the requests that block a deactivation). */
+  data?: unknown;
 }
 
 export interface UserResponse {
@@ -188,6 +190,8 @@ export interface VacationBalanceResponse {
 export type PreviewProblemCode =
   | "START_IN_PAST"
   | "START_TOO_FAR"
+  /** Starts before the employee's hire date (registered ahead of the first day). */
+  | "START_BEFORE_HIRE_DATE"
   | "INVALID_LEAVE_TYPE"
   | "NO_BUSINESS_DAYS"
   | "EXCEEDS_TYPE_LIMIT"
@@ -224,7 +228,25 @@ export type HrErrorCode =
   /** Someone saved it after it was loaded (expectedUpdatedAt differs). */
   | "STALE_DATA"
   /** A type that counts against vacations cannot cap requests below 12 days (Art. 78 LFT). */
-  | "LIMIT_BELOW_LFT_MINIMUM";
+  | "LIMIT_BELOW_LFT_MINIMUM"
+  // ---------- Employees (see server/src/modules/hr/errors.ts) ----------
+  | "CANNOT_RESET_OWN_PASSWORD"
+  | "EMPLOYEE_INACTIVE"
+  | "EMPLOYEE_ALREADY_ACTIVE"
+  | "DUPLICATE_EMAIL"
+  | "DEPARTMENT_NOT_FOUND"
+  | "MANAGER_IS_SELF"
+  | "MANAGER_CYCLE"
+  | "MANAGER_NOT_ELIGIBLE"
+  | "HAS_ACTIVE_REPORTS"
+  | "LAST_ACTIVE_HR"
+  | "HAS_OVERDUE_PENDING_REQUESTS"
+  | "HIRE_DATE_AFTER_REQUESTS"
+  | "HIRE_DATE_OUT_OF_RANGE"
+  | "CANNOT_CHANGE_OWN_ROLE"
+  | "CANNOT_DEACTIVATE_SELF"
+  | "CANNOT_EDIT_OWN_HIRE_DATE"
+  | "CANNOT_CHANGE_OWN_MANAGER";
 
 export interface Department {
   id: string;
@@ -294,4 +316,144 @@ export interface HolidayImpact {
 
 export interface CreatedHolidayResponse extends HolidayImpact {
   holiday: Holiday;
+}
+
+// ---------- Employees (HR) ----------
+
+export interface DepartmentRef {
+  id: string;
+  name: string;
+}
+
+/** An employee as the HR list, create, edit and state changes return it. */
+export interface Employee {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: Role;
+  /** "YYYY-MM-DD" */
+  hireDate: string;
+  isActive: boolean;
+  /** Still using a temporary password set by HR. */
+  mustChangePassword: boolean;
+  departmentId: string | null;
+  managerId: string | null;
+  department: DepartmentRef | null;
+  manager: Person | null;
+  createdAt: string;
+  /** Sent back as expectedUpdatedAt when editing (409 STALE_DATA if it changed). */
+  updatedAt: string;
+}
+
+export interface EmployeesPage {
+  employees: Employee[];
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
+export type EmployeeStatusFilter = "active" | "inactive" | "all";
+
+export interface EmployeeFilters {
+  q: string;
+  departmentId: string;
+  /** "" = every role. */
+  role: Role | "";
+  status: EmployeeStatusFilter;
+  page: number;
+}
+
+export interface PersonWithRole extends Person {
+  role: Role;
+  isActive: boolean;
+}
+
+/**
+ * What HR may do with this employee, from the API (segregation of duties:
+ * HR never changes its own role, state, hire date or manager).
+ */
+export interface EmployeePermissions {
+  canEditRole: boolean;
+  canEditHireDate: boolean;
+  canEditManager: boolean;
+  canDeactivate: boolean;
+  canReactivate: boolean;
+  canResetPassword: boolean;
+}
+
+export interface EmployeeDetail extends Omit<Employee, "manager"> {
+  manager: PersonWithRole | null;
+  directReports: PersonWithRole[];
+  balance: VacationBalance;
+  permissions: EmployeePermissions;
+}
+
+export interface EmployeeDetailResponse {
+  employee: EmployeeDetail;
+}
+
+export interface EmployeeResponse {
+  employee: Employee;
+}
+
+/** Create and reactivate: the temporary password travels only in this response. */
+export interface EmployeeWithPasswordResponse {
+  temporaryPassword: string;
+  employee: Employee;
+}
+
+export interface PasswordResetResponse {
+  temporaryPassword: string;
+  user: Person & { email: string };
+}
+
+export interface ManagerOption extends Person {
+  role: Role;
+  department: DepartmentRef | null;
+}
+
+export interface ManagerOptionsResponse {
+  managers: ManagerOption[];
+}
+
+export type BalanceSnapshot = Omit<VacationBalance, "asOf">;
+
+export interface HireDateImpact {
+  /** "YYYY-MM-DD" */
+  asOf: string;
+  current: BalanceSnapshot;
+  proposed: BalanceSnapshot;
+  problem: { code: "HIRE_DATE_AFTER_REQUESTS"; message: string; earliestRequestStart: string } | null;
+}
+
+/** A request listed by the deactivation preview (or its 409). */
+export interface DeactivationRequest {
+  id: string;
+  startDate: string;
+  endDate: string;
+  businessDays: number;
+  status: LeaveRequestStatus;
+  leaveType: { name: string };
+}
+
+export interface DeactivationImpact {
+  activeReports: Person[];
+  /** PENDING that already started: they block the deactivation until decided. */
+  overdueRequests: DeactivationRequest[];
+  /** Cancelled by the deactivation (they start after today). */
+  toCancel: { pending: number; approved: number };
+  /** APPROVED that already started: never touched. */
+  startedApproved: number;
+  /** Of those, the ones still running after today (their remaining days may need a settlement adjustment). */
+  approvedRunningPastToday: number;
+  isLastActiveHr: boolean;
+  /** null = it can be deactivated; otherwise the code the POST would answer. */
+  blocker: HrErrorCode | null;
+}
+
+export interface DeactivationResponse {
+  employee: Employee;
+  cancelledRequests: number;
 }

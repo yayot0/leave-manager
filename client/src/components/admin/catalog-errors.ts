@@ -1,7 +1,17 @@
 import { ApiError } from "@/api/client";
 import type { HrErrorCode } from "@/api/types";
 
-export type CatalogField = "name" | "code" | "date" | "max";
+export type CatalogField =
+  | "name"
+  | "code"
+  | "date"
+  | "max"
+  // Employees
+  | "email"
+  | "role"
+  | "department"
+  | "manager"
+  | "hireDate";
 
 /** Which form field an error belongs to, by ApiError.code (never by the message). */
 const FIELD_OF_CODE: Partial<Record<HrErrorCode, CatalogField>> = {
@@ -9,6 +19,18 @@ const FIELD_OF_CODE: Partial<Record<HrErrorCode, CatalogField>> = {
   DUPLICATE_CODE: "code",
   DUPLICATE_DATE: "date",
   LIMIT_BELOW_LFT_MINIMUM: "max",
+  DUPLICATE_EMAIL: "email",
+  DEPARTMENT_NOT_FOUND: "department",
+  MANAGER_IS_SELF: "manager",
+  MANAGER_CYCLE: "manager",
+  MANAGER_NOT_ELIGIBLE: "manager",
+  CANNOT_CHANGE_OWN_MANAGER: "manager",
+  HAS_ACTIVE_REPORTS: "role",
+  LAST_ACTIVE_HR: "role",
+  CANNOT_CHANGE_OWN_ROLE: "role",
+  HIRE_DATE_AFTER_REQUESTS: "hireDate",
+  HIRE_DATE_OUT_OF_RANGE: "hireDate",
+  CANNOT_EDIT_OWN_HIRE_DATE: "hireDate",
 };
 
 export interface CatalogFormError {

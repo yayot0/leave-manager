@@ -1,7 +1,8 @@
 import { prisma } from "../../db/prisma.js";
 import type { Prisma } from "../../generated/prisma/client.js";
 import { isOverlapConstraintViolation } from "../../db/pg-errors.js";
-import { lockUser } from "../../db/locks.js";
+import { lockUserForWrite } from "../../db/locks.js";
+import { UnauthorizedError } from "../../errors/AppError.js";
 import { env } from "../../config/env.js";
 import { todayInTimeZone, toISODate } from "../../domain/dates.js";
 import { transition } from "../../domain/leave-request-state.js";
@@ -9,6 +10,7 @@ import type { CreateLeaveRequestInput, PreviewLeaveRequestInput } from "./leave-
 import {
   evaluateAgainstUserState,
   evaluateRequestInput,
+  evaluateStartAgainstHireDate,
   hasDateProblem,
   OVERLAP_MESSAGE,
   problemToError,
@@ -72,10 +74,24 @@ export async function createLeaveRequest(
       // Serializes "read balance + insert" per user: a concurrent request from
       // the same user waits here until this transaction commits, and then
       // sees the request created by it when computing its own balance.
-      await lockUser(tx, user.id);
+      // It also reads the user under that lock: requireAuth checked isActive
+      // before this transaction, and HR may have deactivated them since
+      // (deactivation takes the same lock and cancels pending requests, so a
+      // request created after it would stay PENDING for an inactive user).
+      const locked = await lockUserForWrite(tx, user.id);
+      if (!locked?.isActive) {
+        throw new UnauthorizedError();
+      }
 
-      // Phase 2 (overlaps, balance) runs under the lock.
-      const state = await evaluateAgainstUserState(tx, user, {
+      // The hire-date limits again, with the hireDate read under the lock
+      // (phase 1 used the session's, and HR may have just changed it).
+      const [dateProblem] = evaluateStartAgainstHireDate(startDate, locked.hireDate, today);
+      if (dateProblem) {
+        throw problemToError(dateProblem);
+      }
+
+      // Phase 2 (overlaps, balance) runs under the lock, with that same hireDate.
+      const state = await evaluateAgainstUserState(tx, { id: user.id, hireDate: locked.hireDate }, {
         startDate,
         endDate,
         leaveType,

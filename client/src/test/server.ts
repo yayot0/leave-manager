@@ -41,6 +41,12 @@ export const handlers = [
     }),
   ),
   http.get("/api/leave-requests/preview", () => HttpResponse.json({ preview: buildPreview() })),
+  // Employees: an empty first page and nobody to pick as manager. A detail
+  // (/api/hr/employees/:id) has no default: mock it in each test.
+  http.get("/api/hr/employees", () =>
+    HttpResponse.json({ employees: [], page: 1, pageSize: 20, total: 0, totalPages: 1 }),
+  ),
+  http.get("/api/hr/employees/manager-options", () => HttpResponse.json({ managers: [] })),
 ];
 
 export const server = setupServer(...handlers);
@@ -68,4 +74,26 @@ export function mockDetail(resolve: (id: string, request: Request) => Response |
       return resolve(id, request);
     }),
   );
+}
+
+// Static paths that "/api/hr/employees/:id" would also match.
+const EMPLOYEE_COLLECTIONS = new Set(["manager-options"]);
+
+/**
+ * Mocks GET /api/hr/employees/:id only (same reason as mockDetail: a bare
+ * handler would also answer /manager-options). Returns the ids asked for.
+ */
+export function mockEmployeeDetail(resolve: (id: string, request: Request) => Response | Promise<Response>): string[] {
+  const asked: string[] = [];
+  server.use(
+    http.get("/api/hr/employees/:id", ({ params, request }) => {
+      const id = String(params.id);
+      if (EMPLOYEE_COLLECTIONS.has(id)) {
+        return undefined;
+      }
+      asked.push(id);
+      return resolve(id, request);
+    }),
+  );
+  return asked;
 }
